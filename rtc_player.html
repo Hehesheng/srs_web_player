@@ -59,6 +59,14 @@
     </style>
     <video id="rtc_media_player" controls autoplay></video>
     <div class="container">
+        <style>
+            #streams_grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, 100px);
+            }
+        </style>
+        <div id="streams_grid">
+        </div>
         <div class="form-inline">
             URL:
             <input type="text" id="txt_url" class="input-xxlarge" value="">
@@ -72,7 +80,16 @@
             <button class="btn btn-primary" id="btn_play">播放视频</button>
         </div>
 
-        SessionID: <span id='sessionid'></span>
+        <style>
+            #text_stats_info {
+                display: flex;
+                justify-content: space-between;
+            }
+        </style>
+        <div id="text_stats_info">
+            <p id="frame_info"></p>
+            <p id="bitrate_info"></p>
+        </div>
         <style>
             #stats_info {
                 display: flex;
@@ -80,25 +97,20 @@
             }
         </style>
         <div id="stats_info">
-            <div>
-                <p id="frame_info"></p>
-                <p id="bitrate_info"></p>
-            </div>
             <div class="graph-container" id="networkDelayGraph">
                 <div>Network delay (milliseconds)</div>
                 <canvas id="networkDelayCanvas"></canvas>
             </div>
-            <text>--</text>
             <div class="graph-container" id="timeGraph">
                 <div>Render delay (milliseconds)</div>
                 <canvas id="timeCanvas"></canvas>
             </div>
-            <text>--</text>
-            <div class="graph-container" id="processingGraph">
-                <div>Processing time (converted to milliseconds)</div>
-                <canvas id="processingCanvas"></canvas>
+            <div class="graph-container" id="frameIntervalGraph">
+                <div>Frame Interval time (milliseconds)</div>
+                <canvas id="frameIntervalCanvas"></canvas>
             </div>
         </div>
+        SessionID: <span id='sessionid'></span>
 
         <label></label>
         Simulator: <a href='#' id='simulator-drop'>Drop</a>
@@ -108,222 +120,7 @@
             <p><a href="https://github.com/ossrs/srs">SRS Team &copy; 2020</a></p>
         </footer>
     </div>
-    <script type="text/javascript">
-        $(function () {
-            var sdk = null; // Global handler to do cleanup when replaying.\
-            // ping
-            var p = new Ping();
-            var ping_has_finish = true;
-            var ping_interval_var = setInterval(function () {
-                if (sdk && ping_has_finish) {
-                    ping_has_finish = false;
-                    p.ping(window.location.origin, function (err, data) {
-                        // Also display error if err is returned.
-                        ping_has_finish = true;
-                        if (err) {
-                            data = data + " " + err;
-                            console.log("error:", data);
-                            return;
-                        }
-                        maxNetworkDelay = data;
-                        networkDelaySeries.addPoint(Date.now(), maxNetworkDelay);
-                        networkDelayGraph.setDataSeries([networkDelaySeries]);
-                        networkDelayGraph.updateEndDate();
-                    });
-                }
-            }, 500);
-            // graph value
-            let processingGraph;
-            let processingSeries;
-
-            let timeGraph;
-            let timeSeries;
-
-            let networkDelayGraph;
-            let networkDelaySeries;
-
-            let maxProcessingDuration = -1;
-            let maxRenderTime = -1;
-            let maxNetworkDelay = -1;
-            const windowSize = 30;
-            var startPlay = function () {
-                $('#rtc_media_player').show();
-
-                processingSeries = new TimelineDataSeries();
-                processingGraph = new TimelineGraphView('processingGraph', 'processingCanvas');
-                processingGraph.updateEndDate();
-
-                timeSeries = new TimelineDataSeries();
-                timeGraph = new TimelineGraphView('timeGraph', 'timeCanvas');
-                timeGraph.updateEndDate();
-
-                networkDelaySeries = new TimelineDataSeries();
-                networkDelayGraph = new TimelineGraphView('networkDelayGraph', 'networkDelayCanvas');
-                networkDelayGraph.updateEndDate();
-
-                // Close PC when user replay.
-                if (sdk) {
-                    sdk.close();
-                }
-                sdk = new SrsRtcPlayerAsync();
-
-                // https://webrtc.org/getting-started/remote-streams
-                $('#rtc_media_player').prop('srcObject', sdk.stream);
-                // Optional callback, SDK will add track to stream.
-                // sdk.ontrack = function (event) { console.log('Got track', event); sdk.stream.addTrack(event.track); };
-
-                // For example: webrtc://r.ossrs.net/live/livestream
-                var url = $("#txt_url").val();
-                sdk.play(url).then(function (session) {
-                    $('#sessionid').html(session.sessionid);
-                    $('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
-                }).catch(function (reason) {
-                    sdk.close();
-                    $('#rtc_media_player').hide();
-                    console.error(reason);
-                });
-            };
-
-            function update_stream_url(query) {
-                query.stream = $("#user_name").val();
-                srs_init_rtc("#txt_url", query);
-            }
-
-            $('#rtc_media_player').hide();
-            var query = parse_query_string();
-            // srs_init_rtc("#txt_url", query);
-            update_stream_url(query);
-
-            $("#btn_play").click(function () {
-                $('#rtc_media_player').prop('muted', false);
-                startPlay();
-                $('#navbar_id').hide();
-            });
-            $("#user_name").change(function () {
-                update_stream_url(query);
-            });
-
-            if (query.autostart === 'true') {
-                $('#rtc_media_player').prop('muted', true);
-                console.warn('For autostart, we should mute it, see https://www.jianshu.com/p/c3c6944eed5a ' +
-                    'or https://developers.google.com/web/updates/2017/09/autoplay-policy-changes#audiovideo_elements');
-                window.addEventListener("load", function () { startPlay(); });
-            }
-            // Part 1:
-            var vid = document.querySelector("#rtc_media_player");
-            var last_media_time, last_frame_num, fps;
-            var fps_rounder = [];
-            var fps_time_rounder = [];
-            var last_metadata = null;
-            // Part 2 (with some modifications):
-            function ticker(now, metaData) {
-                var media_time_diff = Math.abs(metaData.mediaTime - last_media_time);
-                var frame_num_diff = Math.abs(metaData.presentedFrames - last_frame_num);
-                var diff = media_time_diff / frame_num_diff;
-                if (diff) {
-                    fps_rounder.push(diff);
-                    fps_time_rounder.push(metaData.mediaTime);
-                    // fps = Math.round(1 / get_fps_average());
-                    // document.querySelector("p").textContent = "FPS: " + fps;
-                }
-                last_media_time = metaData.mediaTime;
-                last_frame_num = metaData.presentedFrames;
-                last_metadata = metaData;
-                // console.info(metaData);
-                // For graph purposes, take the maximum over a window.
-                maxProcessingDuration = Math.max(1000 * metaData.processingDuration, maxProcessingDuration);
-                maxRenderTime = Math.max(metaData.expectedDisplayTime - metaData.receiveTime, maxRenderTime);
-
-                if (metaData.presentedFrames % windowSize !== 0) {
-                    vid.requestVideoFrameCallback(ticker);
-                    return;
-                }
-                // The graph library does not like the performance.now() style `now`.
-                processingSeries.addPoint(Date.now(), maxProcessingDuration);
-                processingGraph.setDataSeries([processingSeries]);
-                processingGraph.updateEndDate();
-
-                timeSeries.addPoint(Date.now(), maxRenderTime);
-                timeGraph.setDataSeries([timeSeries]);
-                timeGraph.updateEndDate();
-
-                maxProcessingDuration = -1;
-                maxRenderTime = -1;
-                vid.requestVideoFrameCallback(ticker);
-            }
-            vid.requestVideoFrameCallback(ticker);
-            // Part 3:
-            vid.addEventListener("seeked", function () {
-                fps_rounder.pop();
-            });
-            // Part 4:
-            function get_fps_average() {
-                if (fps_rounder.length == 0) return 0;
-                return fps_rounder.reduce((a, b) => a + b) / fps_rounder.length;
-            }
-            function update_frame_info(fps, width, height) {
-                document.querySelector("#frame_info").textContent = "Video Info: " + width + "x" + height + ", " + fps + "FPS";
-            }
-            let audio_bytes_pre;
-            let video_bytes_pre;
-            let audio_ts_pre;
-            let video_ts_pre;
-            function showRemoteStats(results) {
-                // calculate video bitrate
-                let audio_bps = "0";
-                let video_bps = "0";
-                results.forEach(report => {
-                    const now = report.timestamp;
-                    let bitrate;
-                    if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
-                        const bytes = report.bytesReceived;
-                        if (video_ts_pre) {
-                            video_bps = 8 * (bytes - video_bytes_pre) / (now - video_ts_pre);
-                            video_bps = Math.floor(video_bps);
-                        }
-                        video_bytes_pre = bytes;
-                        video_ts_pre = now;
-                    } else if (report.type === 'inbound-rtp' && report.mediaType === 'audio') {
-                        const bytes = report.bytesReceived;
-                        if (audio_ts_pre) {
-                            audio_bps = 8 * (bytes - audio_bytes_pre) / (now - audio_ts_pre);
-                            audio_bps = Math.floor(audio_bps);
-                        }
-                        audio_bytes_pre = bytes;
-                        audio_ts_pre = now;
-                    }
-                });
-                audio_bps += 'kbps';
-                video_bps += 'kbps';
-                document.querySelector("#bitrate_info").textContent = `video:\n${video_bps}\naudio:\n${audio_bps}`;
-            }
-            setInterval(function () {
-                if (sdk) {
-                    sdk.pc.getStats(null)
-                        .then(showRemoteStats, err => console.log(err));
-                }
-            }, 2000);
-            setInterval(function () {
-                if (fps_rounder.length == 0) {
-                    update_frame_info(0, 0, 0);
-                    return;
-                }
-                var has_shift = false;
-                while (fps_time_rounder.length > 0 &&
-                    Math.abs(fps_time_rounder[fps_time_rounder.length - 1] - fps_time_rounder[0]) > 0.3) {
-                    fps_rounder.shift();
-                    fps_time_rounder.shift();
-                    has_shift = true;
-                }
-                if (!has_shift) {
-                    fps_rounder.shift();
-                    fps_time_rounder.shift();
-                }
-                fps = Math.round(1 / get_fps_average());
-                update_frame_info(fps, last_metadata.width, last_metadata.height);
-            }, 200);
-        });
-    </script>
+    <script type="text/javascript" src="js/rtc.player.page.js"></script>
 </body>
 
 </html>

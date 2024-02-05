@@ -27,6 +27,8 @@ const TimelineDataSeries = (function() {
     // Whether or not the data series should be drawn.
     this.isVisible_ = true;
 
+    this.MaxValuesBufferSize_ = MAX_STATS_DATA_POINT_BUFFER_SIZE;
+
     this.cacheStartTime_ = null;
     this.cacheStepSize_ = 0;
     this.cacheValues_ = [];
@@ -52,6 +54,12 @@ const TimelineDataSeries = (function() {
       };
     },
 
+    setMaxBufferSize: function(maxSize) {
+      if (maxSize > 0) {
+        this.MaxValuesBufferSize_ = maxSize;
+      }
+    },
+
     /**
      * Adds a DataPoint to |this| with the specified time and value.
      * DataPoints are assumed to be received in chronological order.
@@ -60,7 +68,7 @@ const TimelineDataSeries = (function() {
       let time = new Date(timeTicks);
       this.dataPoints_.push(new DataPoint(time, value));
 
-      if (this.dataPoints_.length > MAX_STATS_DATA_POINT_BUFFER_SIZE) {
+      if (this.dataPoints_.length > this.MaxValuesBufferSize_) {
         this.dataPoints_.shift();
       }
     },
