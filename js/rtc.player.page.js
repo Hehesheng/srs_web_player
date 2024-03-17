@@ -23,11 +23,12 @@ $(function () {
 
         timeSeries = new TimelineDataSeries();
         timeGraph = new TimelineGraphView('timeGraph', 'timeCanvas');
-        timeGraph.setScale(400);
+        timeGraph.setScale(200);
         timeGraph.updateEndDate();
 
         networkDelaySeries = new TimelineDataSeries();
         networkDelayGraph = new TimelineGraphView('networkDelayGraph', 'networkDelayCanvas');
+        networkDelayGraph.setScale(200);
         networkDelayGraph.updateEndDate();
 
         // Close PC when user replay.
@@ -86,26 +87,47 @@ $(function () {
             if (Http.readyState === 4 && Http.status === 200) {
                 // console.log(Http.responseText);
                 let server_streams_status = JSON.parse(Http.responseText);
+                let user_name_selector = document.querySelector("#user_name");
                 console.log(server_streams_status);
                 server_streams_status.streams.forEach((stream, index, arr) => {
                     let new_button = document.createElement("button");
                     new_button.className = "btn btn-primary";
-                    let text_node = document.createTextNode(stream.name);
-                    new_button.appendChild(text_node);
+                    new_button.innerHTML = stream.name;
                     new_button.onclick = function () {
                         console.info("button click");
                         update_stream_url(query, $(this).text());
                         on_click_start_play();
                     };
                     streams_list.appendChild(new_button);
+                    // add to user option
+                    let new_option = document.createElement("option");
+                    new_option.value = stream.name;
+                    new_option.innerHTML = stream.name;
+                    user_name_selector.appendChild(new_option);
                 });
+                // add refresh button
+                let refresh_button = document.createElement("button");
+                refresh_button.className = "btn btn-primary";
+                refresh_button.innerHTML = "刷新";
+                refresh_button.onclick = function () {
+                    // clear list
+                    streams_list.innerHTML = "";
+                    user_name_selector.innerHTML = "";
+                    // <option value="livestream">default</option>
+                    let default_option = document.createElement("option");
+                    default_option.value = "livestream";
+                    default_option.innerHTML = "default";
+                    user_name_selector.appendChild(default_option);
+                    find_streams_page(url);
+                };
+                streams_list.appendChild(refresh_button);
             }
         }
     };
 
     console.info(query);
     find_streams_page("http://" + query.hostname + ":1985/api/v1/streams/");
-    
+
     if (query.autostart === 'true') {
         $('#rtc_media_player').prop('muted', true);
         console.warn('For autostart, we should mute it, see https://www.jianshu.com/p/c3c6944eed5a ' +
