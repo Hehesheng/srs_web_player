@@ -56,6 +56,7 @@ $(function () {
 
     function update_stream_url(query, stream_name) {
         query.stream = stream_name;
+        $("#record_stream_name").val(stream_name);
         srs_init_rtc("#txt_url", query);
     }
 
@@ -68,6 +69,51 @@ $(function () {
         $('#rtc_media_player').prop('muted', false);
         startPlay();
         $('#navbar_id').hide();
+        get_record_list(query, $("#record_stream_name").val());
+    }
+
+    document.querySelector("#refresh_record_file_button").onclick = function() {
+        get_record_list(query, $("#record_stream_name").val());
+    };
+
+    function get_record_list(query, stream_name) {
+        base_url = "http://" + query.hostname + ":11985"
+        url = base_url + "/stream/query_record/" + stream_name;
+        const record_file_list_query = new XMLHttpRequest();
+        record_file_list_query.open("GET", url);
+        record_file_list_query.send();
+
+        let record_request_status = document.getElementById("record_file_request_status");
+        record_request_status.style.display = "";
+        record_file_list_query.onreadystatechange = (e) => {
+            if (record_file_list_query.readyState === 4 && record_file_list_query.status === 200) {
+                record_request_status.style.display = "none";
+                let record_file_list_infos = JSON.parse(record_file_list_query.responseText);
+                let record_file_list_obj = document.querySelector("#record_file_list");
+                record_file_list_obj.innerHTML = '';
+                if (record_file_list_infos.stream_name != stream_name) {
+                    return;
+                }
+                record_file_list_infos.files.forEach((file_info, index, arr) => {
+                    let file_item = document.createElement("div");
+                    file_item.className = "form-inline";
+                    file_item.style = "text-align: left; border: 1px solid black;";
+                    //
+                    let download_link = document.createElement("a");
+                    file_url = base_url + "/stream/download_record/" + file_info.file_name;
+                    download_link.href = file_url;
+                    download_link.download = file_info.file_name;
+                    download_link.innerHTML = file_info.file_name;
+                    file_item.appendChild(download_link);
+                    //
+                    let file_size_text = document.createElement("text");
+                    file_size_text.style = "text-align: right";
+                    file_size_text.innerHTML = " file size: " + (file_info.file_size / 1024 / 1024).toFixed(2) + "MB";
+                    file_item.appendChild(file_size_text);
+                    record_file_list_obj.appendChild(file_item);
+                });
+            }
+        }
     }
 
     $("#btn_play").click(function () {
