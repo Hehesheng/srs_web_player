@@ -117,13 +117,13 @@ $(function () {
                         // media_player.innerHTML = "";
                         media_player.style.display = "";
                         $('#rtc_media_player').prop('srcObject', null);
-                        media_player.src = base_url + "/stream/record/" + file_info.file_name;
+                        media_player.src = base_url + "/stream/record/p/" + file_info.file_name;
                     };
                     file_item.appendChild(preview_record_file_button);
                     file_item.appendChild(document.createTextNode('\n'));
                     // download link
                     let download_link = document.createElement("a");
-                    download_link.href = base_url + "/stream/record/" + file_info.file_name;
+                    download_link.href = base_url + "/stream/record/d/" + file_info.file_name;
                     download_link.download = file_info.file_name;
                     download_link.innerHTML = file_info.file_name;
                     file_item.appendChild(download_link);
@@ -135,6 +135,9 @@ $(function () {
                     file_item.appendChild(file_size_text);
                     record_file_list_obj.appendChild(file_item);
                 });
+            } else if (record_file_list_query.readyState === 4) {
+                record_request_status.style.display = "none";
+                alert(record_file_list_query.responseText);
             }
         }
     }
