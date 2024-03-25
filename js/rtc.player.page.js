@@ -72,15 +72,15 @@ $(function () {
         get_record_list(query, $("#record_stream_name").val());
     }
 
-    document.querySelector("#refresh_record_file_button").onclick = function() {
+    document.querySelector("#refresh_record_file_button").onclick = function () {
         get_record_list(query, $("#record_stream_name").val());
     };
 
     function get_record_list(query, stream_name) {
         base_url = "http://" + query.hostname + ":11985"
-        url = base_url + "/stream/query_record/" + stream_name;
+        query_url = base_url + "/stream/query_record/" + stream_name;
         const record_file_list_query = new XMLHttpRequest();
-        record_file_list_query.open("GET", url);
+        record_file_list_query.open("GET", query_url);
         record_file_list_query.send();
 
         let record_request_status = document.getElementById("record_file_request_status");
@@ -95,20 +95,43 @@ $(function () {
                     return;
                 }
                 record_file_list_infos.files.forEach((file_info, index, arr) => {
+                    // single file item parent
                     let file_item = document.createElement("div");
                     file_item.className = "form-inline";
                     file_item.style = "text-align: left; border: 1px solid black;";
-                    //
+                    // preview button
+                    let preview_record_file_button = document.createElement("button");
+                    preview_record_file_button.className = "btn btn-primary";
+                    preview_record_file_button.innerHTML = "preview";
+                    preview_record_file_button.onclick = function () {
+                        if (file_info.file_name.split(".").slice(-1) != "mp4") {
+                            alert("仅支持mp4录制文件！");
+                            return;
+                        }
+                        if (sdk) {
+                            sdk.close();
+                            sdk = null;
+                        }
+                        // preview_url = file_url;
+                        let media_player = document.getElementById("rtc_media_player");
+                        // media_player.innerHTML = "";
+                        media_player.style.display = "";
+                        $('#rtc_media_player').prop('srcObject', null);
+                        media_player.src = base_url + "/stream/record/" + file_info.file_name;
+                    };
+                    file_item.appendChild(preview_record_file_button);
+                    file_item.appendChild(document.createTextNode('\n'));
+                    // download link
                     let download_link = document.createElement("a");
-                    file_url = base_url + "/stream/download_record/" + file_info.file_name;
-                    download_link.href = file_url;
+                    download_link.href = base_url + "/stream/record/" + file_info.file_name;
                     download_link.download = file_info.file_name;
                     download_link.innerHTML = file_info.file_name;
                     file_item.appendChild(download_link);
-                    //
+                    file_item.appendChild(document.createTextNode('\n'));
+                    // file size info
                     let file_size_text = document.createElement("text");
                     file_size_text.style = "text-align: right";
-                    file_size_text.innerHTML = " file size: " + (file_info.file_size / 1024 / 1024).toFixed(2) + "MB";
+                    file_size_text.innerHTML = "file size: " + (file_info.file_size / 1024 / 1024).toFixed(2) + "MB";
                     file_item.appendChild(file_size_text);
                     record_file_list_obj.appendChild(file_item);
                 });
@@ -123,17 +146,39 @@ $(function () {
         update_stream_url(query, $("#user_name").val());
     });
 
-    function find_streams_page(url) {
+    function add_refresh_stream_list_button(url) {
+        // add refresh button
         let streams_list = document.querySelector("#streams_grid");
+        let user_name_selector = document.querySelector("#user_name");
+        let refresh_button = document.createElement("button");
+        refresh_button.className = "btn btn-primary";
+        refresh_button.innerHTML = "刷新";
+        refresh_button.onclick = function () {
+            // clear list
+            streams_list.innerHTML = "";
+            user_name_selector.innerHTML = "";
+            // <option value="livestream">default</option>
+            let default_option = document.createElement("option");
+            default_option.value = "livestream";
+            default_option.innerHTML = "default";
+            user_name_selector.appendChild(default_option);
+            find_streams_page(url);
+        };
+        streams_list.appendChild(refresh_button);
+    };
+
+    function find_streams_page(url) {
         const Http = new XMLHttpRequest();
         Http.open("GET", url);
         Http.send();
 
         Http.onreadystatechange = (e) => {
             if (Http.readyState === 4 && Http.status === 200) {
+                // add_refresh_stream_list_button(url);
                 // console.log(Http.responseText);
-                let server_streams_status = JSON.parse(Http.responseText);
+                let streams_list = document.querySelector("#streams_grid");
                 let user_name_selector = document.querySelector("#user_name");
+                let server_streams_status = JSON.parse(Http.responseText);
                 console.log(server_streams_status);
                 server_streams_status.streams.forEach((stream, index, arr) => {
                     let new_button = document.createElement("button");
@@ -151,24 +196,9 @@ $(function () {
                     new_option.innerHTML = stream.name;
                     user_name_selector.appendChild(new_option);
                 });
-                // add refresh button
-                let refresh_button = document.createElement("button");
-                refresh_button.className = "btn btn-primary";
-                refresh_button.innerHTML = "刷新";
-                refresh_button.onclick = function () {
-                    // clear list
-                    streams_list.innerHTML = "";
-                    user_name_selector.innerHTML = "";
-                    // <option value="livestream">default</option>
-                    let default_option = document.createElement("option");
-                    default_option.value = "livestream";
-                    default_option.innerHTML = "default";
-                    user_name_selector.appendChild(default_option);
-                    find_streams_page(url);
-                };
-                streams_list.appendChild(refresh_button);
             }
         }
+        add_refresh_stream_list_button(url);
     };
 
     console.info(query);
