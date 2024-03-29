@@ -1,8 +1,8 @@
 $(function () {
     var sdk = null; // Global handler to do cleanup when replaying.
     // graph value
-    let frameIntervalGraph;
-    let frameIntervalSeries;
+    let fpsGraph;
+    let fpsSeries;
 
     let timeGraph;
     let timeSeries;
@@ -13,13 +13,11 @@ $(function () {
     let maxRenderTime = -1;
     let maxNetworkDelay = -1;
     const windowSize = 30;
-    var startPlay = function () {
-        $('#rtc_media_player').show();
-
-        frameIntervalSeries = new TimelineDataSeries();
-        frameIntervalGraph = new TimelineGraphView('frameIntervalGraph', 'frameIntervalCanvas');
-        frameIntervalGraph.setScale(200);
-        frameIntervalGraph.updateEndDate();
+    function init_status_graph() {
+        fpsSeries = new TimelineDataSeries();
+        fpsGraph = new TimelineGraphView('fpsGraph', 'fpsCanvas');
+        fpsGraph.setScale(200);
+        fpsGraph.updateEndDate();
 
         timeSeries = new TimelineDataSeries();
         timeGraph = new TimelineGraphView('timeGraph', 'timeCanvas');
@@ -30,7 +28,20 @@ $(function () {
         networkDelayGraph = new TimelineGraphView('networkDelayGraph', 'networkDelayCanvas');
         networkDelayGraph.setScale(200);
         networkDelayGraph.updateEndDate();
-
+    }
+    function set_max_delay() {
+        if (sdk) {
+            let max_delay_ms = document.getElementById("max_delay_value").value;
+            let [aRec, vRec] = sdk.pc.getReceivers();
+            // console.info(max_delay_ms);
+            aRec.playoutDelayHint = max_delay_ms / 1000;
+            vRec.playoutDelayHint = max_delay_ms / 1000;
+        }
+    }
+    init_status_graph();
+    var startPlay = function () {
+        $('#rtc_media_player').show();
+        init_status_graph();
         // Close PC when user replay.
         if (sdk) {
             sdk.close();
@@ -52,7 +63,12 @@ $(function () {
             $('#rtc_media_player').hide();
             console.error(reason);
         });
+        // console.info(sdk.pc);
+        set_max_delay();
     };
+
+    let set_max_delay_button = document.getElementById("btn_set_max_delay");
+    set_max_delay_button.onclick = set_max_delay;
 
     function update_stream_url(query, stream_name) {
         query.stream = stream_name;
@@ -77,7 +93,8 @@ $(function () {
     };
 
     function get_record_list(query, stream_name) {
-        base_url = "http://" + query.hostname + ":11985"
+        let web_protocal = window.location.protocol;
+        base_url = web_protocal + "//" + query.hostname + (web_protocal == "http:" ? ":11985" : "");
         query_url = base_url + "/stream/query_record/" + stream_name;
         const record_file_list_query = new XMLHttpRequest();
         record_file_list_query.open("GET", query_url);
@@ -94,7 +111,7 @@ $(function () {
                 if (record_file_list_infos.stream_name != stream_name) {
                     return;
                 }
-                record_file_list_infos.files.forEach((file_info, index, arr) => {
+                record_file_list_infos.files.reverse().forEach((file_info, index, arr) => {
                     // single file item parent
                     let file_item = document.createElement("div");
                     file_item.className = "form-inline";
@@ -103,8 +120,8 @@ $(function () {
                     let preview_record_file_button = document.createElement("button");
                     preview_record_file_button.className = "btn btn-primary";
                     preview_record_file_button.innerHTML = "preview";
-                    preview_record_file_button.onclick = function () {
-                        if (file_info.file_name.split(".").slice(-1) != "mp4") {
+                    function preview_button_click (record_info) {
+                        if (record_info.file_name.split(".").slice(-1) != "mp4") {
                             alert("仅支持mp4录制文件！");
                             return;
                         }
@@ -117,8 +134,11 @@ $(function () {
                         // media_player.innerHTML = "";
                         media_player.style.display = "";
                         $('#rtc_media_player').prop('srcObject', null);
-                        media_player.src = base_url + "/stream/record/p/" + file_info.file_name;
-                    };
+                        media_player.src = base_url + "/stream/record/p/" + record_info.file_name;
+                    }
+                    preview_record_file_button.addEventListener("click", function () {
+                        preview_button_click(file_info);
+                    });
                     file_item.appendChild(preview_record_file_button);
                     file_item.appendChild(document.createTextNode('\n'));
                     // download link
@@ -126,6 +146,8 @@ $(function () {
                     download_link.href = base_url + "/stream/record/d/" + file_info.file_name;
                     download_link.download = file_info.file_name;
                     download_link.innerHTML = file_info.file_name;
+                    download_link.target = "_blank";
+                    download_link.rel = "noopener noreferrer";
                     file_item.appendChild(download_link);
                     file_item.appendChild(document.createTextNode('\n'));
                     // file size info
@@ -154,6 +176,7 @@ $(function () {
         let streams_list = document.querySelector("#streams_grid");
         let user_name_selector = document.querySelector("#user_name");
         let refresh_button = document.createElement("button");
+        streams_list.style.gap = "1vh";
         refresh_button.className = "btn btn-primary";
         refresh_button.innerHTML = "刷新";
         refresh_button.onclick = function () {
@@ -205,7 +228,8 @@ $(function () {
     };
 
     console.info(query);
-    find_streams_page("http://" + query.hostname + ":1985/api/v1/streams/");
+    let web_protocal = window.location.protocol;
+    find_streams_page(web_protocal + "//" + query.hostname + (web_protocal == "http:" ? ":1985" : "") + "/api/v1/streams/");
 
     if (query.autostart === 'true') {
         $('#rtc_media_player').prop('muted', true);
@@ -216,78 +240,45 @@ $(function () {
     // Part 1:
     var vid = document.querySelector("#rtc_media_player");
     var last_media_time, last_frame_num, fps;
-    var fps_rounder = [];
-    var fps_time_rounder = [];
     var last_metadata = null;
-    var last_update_tick;
-    var last_max_frame_interval, last_min_frame_interval;
-    var max_frame_interval_tick = 0, min_frame_interval_tick = 0;
+    let frame_info_rounder = [];
+    class FrameInfo {
+        constructor(diff, time) {
+            this.diff = diff;
+            this.time = time;
+        }
+    }
     // Part 2 (with some modifications):
-    function ticker(nowMs, metaData) {
-        var media_time_diff = Math.abs(metaData.mediaTime - last_media_time);
-        var frame_num_diff = Math.abs(metaData.presentedFrames - last_frame_num);
-        var diff = media_time_diff / frame_num_diff;
+    function frameBeginCallback(nowMs, metaData) {
+        let media_time_diff = Math.abs(metaData.mediaTime - last_media_time);
+        let frame_num_diff = Math.abs(metaData.presentedFrames - last_frame_num);
+        let diff = media_time_diff / frame_num_diff;
         if (diff) {
-            fps_rounder.push(diff);
-            fps_time_rounder.push(metaData.mediaTime);
-            // The graph library does not like the performance.now() style `now`.
-            const UPDATE_INTERVAL = 0.2;
-            if (!last_update_tick) {
-                last_update_tick = nowMs;
-            }
-            if (last_max_frame_interval === 0 || last_max_frame_interval < diff) {
-                last_max_frame_interval = diff;
-                max_frame_interval_tick = Date.now();
-            }
-            if (last_min_frame_interval === UPDATE_INTERVAL || last_min_frame_interval > diff) {
-                last_min_frame_interval = diff;
-                min_frame_interval_tick = Date.now();
-            }
-            if (nowMs - last_update_tick > UPDATE_INTERVAL * 1000) {
-                if (max_frame_interval_tick !== 0) {
-                    frameIntervalSeries.addPoint(max_frame_interval_tick, last_max_frame_interval * 1000);
-                }
-                if (min_frame_interval_tick !== 0) {
-                    frameIntervalSeries.addPoint(min_frame_interval_tick, last_min_frame_interval * 1000);
-                }
-                frameIntervalGraph.setDataSeries([frameIntervalSeries]);
-                frameIntervalGraph.updateEndDate();
-                last_update_tick = nowMs;
-                last_max_frame_interval = 0;
-                last_min_frame_interval = UPDATE_INTERVAL;
-                max_frame_interval_tick = 0;
-                min_frame_interval_tick = 0;
-            }
+            frame_info_rounder.push(new FrameInfo(frame_num_diff, Date.now()));
         }
         last_media_time = metaData.mediaTime;
         last_frame_num = metaData.presentedFrames;
         last_metadata = metaData;
+        // console.info(nowMs);
         // console.info(metaData);
         // For graph purposes, take the maximum over a window.
         maxRenderTime = Math.max(metaData.expectedDisplayTime - metaData.receiveTime, maxRenderTime);
 
-        if (metaData.presentedFrames % windowSize !== 0) {
-            vid.requestVideoFrameCallback(ticker);
-            return;
+        if (metaData.presentedFrames % windowSize === 0) {
+            timeSeries.addPoint(Date.now(), maxRenderTime);
+            timeGraph.setDataSeries([timeSeries]);
+            timeGraph.updateEndDate();
+    
+            maxRenderTime = -1;
         }
-
-        timeSeries.addPoint(Date.now(), maxRenderTime);
-        timeGraph.setDataSeries([timeSeries]);
-        timeGraph.updateEndDate();
-
-        maxRenderTime = -1;
-        vid.requestVideoFrameCallback(ticker);
+        vid.requestVideoFrameCallback(frameBeginCallback);
     }
-    vid.requestVideoFrameCallback(ticker);
+    vid.requestVideoFrameCallback(frameBeginCallback);
     // Part 3:
     vid.addEventListener("seeked", function () {
-        fps_rounder.pop();
+        frame_info_rounder.pop();
     });
     // Part 4:
-    function get_fps_average() {
-        if (fps_rounder.length == 0) return 0;
-        return fps_rounder.reduce((a, b) => a + b) / fps_rounder.length;
-    }
     function update_frame_info(fps, width, height) {
         document.querySelector("#frame_info").textContent = "Video Info: " + width + "x" + height + ", " + fps + "FPS";
     }
@@ -361,22 +352,16 @@ $(function () {
         }
     }, 500);
     setInterval(function () {
-        if (fps_rounder.length == 0) {
-            update_frame_info(0, 0, 0);
-            return;
+        let now_ms = Date.now();
+        while (frame_info_rounder.length > 0 && now_ms - frame_info_rounder[0].time > 1000) {
+            frame_info_rounder.shift();
         }
-        var has_shift = false;
-        while (fps_time_rounder.length > 0 &&
-            Math.abs(fps_time_rounder[fps_time_rounder.length - 1] - fps_time_rounder[0]) > 0.3) {
-            fps_rounder.shift();
-            fps_time_rounder.shift();
-            has_shift = true;
-        }
-        if (!has_shift) {
-            fps_rounder.shift();
-            fps_time_rounder.shift();
-        }
-        fps = Math.round(1 / get_fps_average());
-        update_frame_info(fps, last_metadata.width, last_metadata.height);
+        let fps = frame_info_rounder.length;
+        let width = last_metadata == null ? 0 : last_metadata.width;
+        let height = last_metadata == null ? 0 : last_metadata.height;
+        update_frame_info(fps, width, height);
+        fpsSeries.addPoint(Date.now(), Math.round(fps));
+        fpsGraph.setDataSeries([fpsSeries]);
+        fpsGraph.updateEndDate();
     }, 200);
 });
