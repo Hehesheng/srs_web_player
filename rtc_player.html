@@ -32,10 +32,10 @@
                         <li><a id="nav_rtc_publisher" href="rtc_publisher.html">RTC推流</a></li>
                         <li><a id="nav_whip" href="whip.html">WHIP</a></li>
                         <li><a id="nav_whep" href="whip.html">WHEP</a></li>
-                        <li><a href="http://ossrs.net/srs.release/releases/app.html">iOS/Andriod</a></li>
+                        <!-- <li><a href="http://ossrs.net/srs.release/releases/app.html">iOS/Andriod</a></li> -->
                         <!--<li><a id="nav_srs_publisher" href="srs_publisher.html">SRS编码器</a></li>-->
                         <!--<li><a id="nav_srs_chat" href="srs_chat.html">SRS会议</a></li>-->
-                        <!--<li><a id="nav_srs_bwt" href="srs_bwt.html">SRS测网速</a></li>-->
+                        <!-- <li><a id="nav_srs_bwt" href="srs_bwt.html">SRS测网速</a></li> -->
                         <!--<li><a id="nav_vlc" href="vlc.html">VLC播放器</a></li>-->
                         <!--<li><a id="nav_gb28181" href="srs_gb28181.html">GB28181</a></li>-->
                         <li>
@@ -68,7 +68,7 @@
         <div id="streams_grid">
         </div>
         <div class="form-inline">
-            设置缓冲区ms（默认0，会增加延时，但会缓解卡顿）：
+            设置缓冲区ms（默认0，会增加延时，但会缓解卡顿，推荐值为rtt的1.2~1.5倍）：
             <input type="number" id="max_delay_value" value="0"></input>
             <button class="btn btn-primary" id="btn_set_max_delay">确认</button>
         </div>
@@ -93,7 +93,9 @@
         </div>
         <div class="form-inline">
             查询录制文件(按时间逆序)：
-            <input type="text" id="record_stream_name" class="input-xxlarge" value="">
+            <input type="text" id="record_stream_name" class="input-xxlarge" value="" style="width: 50%;">
+            <input type="checkbox" id="playback_check_box">
+            连播
             <button class="btn btn-primary" id="refresh_record_file_button">刷新文件</button>
             <text id="record_file_request_status" style="display: none;">获取中。。。</text>
             <ul id="record_file_list" style="width: 90%; border: 1px solid black">
