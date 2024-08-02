@@ -262,12 +262,19 @@ $(function () {
                 let server_streams_status = JSON.parse(Http.responseText);
                 console.log(server_streams_status);
                 server_streams_status.streams.forEach((stream, index, arr) => {
+                    if (!stream.publish.active) {
+                        return;
+                    }
+                    let audiences = stream.clients - 1;
                     let new_button = document.createElement("button");
                     new_button.className = "btn btn-primary";
-                    new_button.innerHTML = stream.name;
+                    new_button.innerHTML = stream.name + " 👥:" + audiences;
+                    console.info(stream.name + '\'s audiences: ', audiences);
                     new_button.onclick = function () {
                         console.info("button click");
-                        update_stream_url(query, $(this).text());
+                        // update_stream_url(query, $(this).text());
+                        update_stream_url(query, stream.name);
+                        // console.info("stream name:", stream.name);
                         on_click_start_play();
                     };
                     streams_list.appendChild(new_button);
