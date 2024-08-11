@@ -268,7 +268,7 @@ $(function () {
                     let audiences = stream.clients - 1;
                     let new_button = document.createElement("button");
                     new_button.className = "btn btn-primary";
-                    new_button.innerHTML = stream.name + " 👥:" + audiences;
+                    new_button.innerHTML = stream.name + "<br>👥 " + audiences;
                     console.info(stream.name + '\'s audiences: ', audiences);
                     new_button.onclick = function () {
                         console.info("button click");
