@@ -304,8 +304,17 @@ function SrsRtcPlayerAsync() {
         self.pc.addTransceiver("video", {direction: "recvonly"});
         //self.pc.addTransceiver("video", {direction: "recvonly"});
         //self.pc.addTransceiver("audio", {direction: "recvonly"});
+        function addHEVCCodecToSDP(sdp) {
+            let videoCapabilities = RTCRtpReceiver.getCapabilities('video');
+            console.log('Video Capabilities:', videoCapabilities);
+            // sdp = sdp.replace(/VP8|VP9/g, 'HEVC');
+            console.log(sdp)
+
+            return sdp;
+        }
 
         var offer = await self.pc.createOffer();
+        offer.sdp = addHEVCCodecToSDP(offer.sdp);
         await self.pc.setLocalDescription(offer);
         var session = await new Promise(function(resolve, reject) {
             // @see https://github.com/rtcdn/rtcdn-draft

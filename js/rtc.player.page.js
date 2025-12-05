@@ -130,6 +130,7 @@ $(function () {
         let base_url = web_protocal + "//" + query.hostname + (web_protocal == "http:" ? ":11985" : "");
         let query_url = base_url + "/stream/query_record/" + stream_name;
         const record_file_list_query = new XMLHttpRequest();
+        console.info(query_url);
         record_file_list_query.open("GET", query_url);
         record_file_list_query.send();
 
@@ -196,6 +197,10 @@ $(function () {
                     });
                     file_item.appendChild(preview_record_file_button);
                     file_item.appendChild(document.createTextNode('\n'));
+                    let thumb_pic = document.createElement('img');
+                    thumb_pic.src = "https://alist.3geeks.top/d/recorder/local/temp/img_thump_kylin.jpg";
+                    thumb_pic.style.height = "50px";
+                    file_item.appendChild(thumb_pic);
                     // download link
                     let download_link = document.createElement("a");
                     download_link.href = base_url + "/stream/record/d/" + file_info.file_name;
@@ -230,7 +235,8 @@ $(function () {
         // add refresh button
         let streams_list = document.getElementById("streams_grid");
         let user_name_selector = document.getElementById("user_name");
-        let refresh_button = document.createElement("button");
+        // let refresh_button = document.createElement("button");
+        let refresh_button = document.getElementById("refresh_streams_btn");
         streams_list.style.gap = "1vh";
         refresh_button.className = "btn btn-primary";
         refresh_button.innerHTML = "刷新";
@@ -245,7 +251,7 @@ $(function () {
             user_name_selector.appendChild(default_option);
             find_streams_page(url);
         };
-        streams_list.appendChild(refresh_button);
+        // streams_list.appendChild(refresh_button);
     };
 
     function find_streams_page(url) {
@@ -268,7 +274,7 @@ $(function () {
                     let audiences = stream.clients - 1;
                     let new_button = document.createElement("button");
                     new_button.className = "btn btn-primary";
-                    new_button.innerHTML = stream.name + "<br>👥 " + audiences;
+                    new_button.innerHTML = stream.name + "<img src=\"/stream/cover/" + stream.name + "\">" + "<br>👥 " + audiences;
                     console.info(stream.name + '\'s audiences: ', audiences);
                     new_button.onclick = function () {
                         console.info("button click");
