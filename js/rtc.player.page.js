@@ -1,431 +1,334 @@
 'use strict';
+
+/**
+ * SRS RTC Player 业务逻辑模块
+ * 优化项：点击播放同步搜索录制、连播逆序处理
+ */
 $(function () {
-    var sdk = null; // Global handler to do cleanup when replaying.
-    // graph value
-    let fpsGraph;
-    let fpsSeries;
-
-    let timeGraph;
-    let timeSeries;
-
-    let networkDelayGraph;
-    let networkDelaySeries;
+    let sdk = null;
+    let fpsGraph, fpsSeries;
+    let timeGraph, timeSeries;
+    let networkDelayGraph, networkDelaySeries;
 
     let maxRenderTime = -1;
     const windowSize = 30;
-    function setCookie(name, value) {
-        document.cookie = `${name}=${value}`;
-    }
-    function getCookie(name, if_null) {
-        const value = `; ${document.cookie}`;
-        const parts = value.split(`; ${name}=`);
-        if (parts.length === 2) { 
-            return parts.pop().split(';').shift();
-        }
-        return if_null;
-    }
-    function init_status_graph() {
+    const frameInfoRounder = [];
+
+    // --- 工具函数 ---
+    const utils = {
+        setCookie: (name, value) => { document.cookie = `${name}=${value};path=/`; },
+        getCookie: (name, def) => {
+            const parts = `; ${document.cookie}`.split(`; ${name}=`);
+            return parts.length === 2 ? parts.pop().split(';').shift() : def;
+        },
+        parseQuery: () => parse_query_string() // 依赖外部 srs.page.js
+    };
+
+    // --- 初始化监控图表 ---
+    function initStatusGraphs() {
+        if (fpsGraph) return; 
+
         fpsSeries = new TimelineDataSeries();
         fpsGraph = new TimelineGraphView('fpsGraph', 'fpsCanvas');
-        fpsGraph.setScale(200);
-        fpsGraph.updateEndDate();
+        fpsGraph.setScale(100);
 
         timeSeries = new TimelineDataSeries();
         timeGraph = new TimelineGraphView('timeGraph', 'timeCanvas');
         timeGraph.setScale(200);
-        timeGraph.updateEndDate();
 
         networkDelaySeries = new TimelineDataSeries();
         networkDelayGraph = new TimelineGraphView('networkDelayGraph', 'networkDelayCanvas');
         networkDelayGraph.setScale(200);
-        networkDelayGraph.updateEndDate();
     }
-    let max_delay_value_input = document.getElementById("max_delay_value");
-    function set_max_delay() {
-        let max_delay_ms = max_delay_value_input.value;
-        setCookie("delayMs", max_delay_ms);
-        if (sdk) {
-            // console.info(max_delay_ms);
-            sdk.pc.getReceivers().forEach(function(rec, index, arr) {
-                rec.playoutDelayHint = max_delay_ms / 1000;
+
+    // --- 播放器延迟设置 ---
+    function applyPlayoutDelay() {
+        const delayMs = $("#max_delay_value").val();
+        utils.setCookie("delayMs", delayMs);
+        if (sdk && sdk.pc) {
+            sdk.pc.getReceivers().forEach(rec => {
+                if ('playoutDelayHint' in rec) {
+                    rec.playoutDelayHint = delayMs / 1000;
+                }
             });
         }
     }
-    max_delay_value_input.value = Number(getCookie("delayMs", 0));
-    max_delay_value_input.onkeydown = function (e) {
-        if (e.key == "Enter") {
-            set_max_delay();
+
+    // --- 核心播放逻辑 ---
+    async function startPlay(urlOverride) {
+        const url = urlOverride || $("#txt_url").val();
+        if (!url) return;
+
+        // 1. 同步搜索录制文件
+        // 优先从下拉框获取流名，若无则尝试从 URL 解析
+        let streamName = $("#user_name").val();
+        if (!streamName || streamName === 'livestream') {
+            const match = url.match(/\/([^\/\?]+)(\?|$)/);
+            streamName = match ? match[1] : 'livestream';
         }
-    };
-    init_status_graph();
-    var startPlay = function () {
-        $('#rtc_media_player').show();
-        init_status_graph();
-        // Close PC when user replay.
+        
+        $("#record_stream_name").val(streamName);
+        fetchRecordings(); // 异步触发搜索
+
+        // 2. 执行 WebRTC 播放
         if (sdk) {
             sdk.close();
             sdk = null;
         }
+
+        $('#rtc_media_player').show();
+        initStatusGraphs();
+        
         sdk = new SrsRtcPlayerAsync();
+        const videoElement = document.getElementById("rtc_media_player");
+        $(videoElement).prop('srcObject', sdk.stream);
+        videoElement.src = ""; // 确保不是在播放录制文件
 
-        // https://webrtc.org/getting-started/remote-streams
-        $('#rtc_media_player').prop('srcObject', sdk.stream);
-        // Optional callback, SDK will add track to stream.
-        // sdk.ontrack = function (event) { console.log('Got track', event); sdk.stream.addTrack(event.track); };
-
-        // For example: webrtc://r.ossrs.net/live/livestream
-        var url = $("#txt_url").val();
-        sdk.play(url).then(function (session) {
-            $('#sessionid').html(session.sessionid);
-            $('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
-        }).catch(function (reason) {
+        try {
+            const session = await sdk.play(url);
+            $('#sessionid').text(`ID: ${session.sessionid}`);
+            $('#simulator-drop').attr('href', `${session.simulator}?drop=1&username=${session.sessionid}`);
+            applyPlayoutDelay();
+        } catch (e) {
             sdk.close();
             sdk = null;
             $('#rtc_media_player').hide();
-            console.error(reason);
-        });
-        // console.info(sdk.pc);
-        set_max_delay();
-    };
-
-    let set_max_delay_button = document.getElementById("btn_set_max_delay");
-    set_max_delay_button.onclick = set_max_delay;
-
-    function update_stream_url(query, stream_name) {
-        query.stream = stream_name;
-        $("#record_stream_name").val(stream_name);
-        srs_init_rtc("#txt_url", query);
-    }
-
-    $('#rtc_media_player').hide();
-    var query = parse_query_string();
-    // srs_init_rtc("#txt_url", query);
-    update_stream_url(query, $("#user_name").val());
-
-    function on_click_start_play() {
-        $('#rtc_media_player').prop('muted', false);
-        startPlay();
-        $('#navbar_id').hide();
-        get_record_list(query, $("#record_stream_name").val());
-    }
-
-    function query_record_stream_by_name() {
-        get_record_list(query, $("#record_stream_name").val());
-    }
-    document.getElementById("record_stream_name").onkeydown = function (e) {
-        if (e.key == "Enter") {
-            query_record_stream_by_name();
+            console.error("SRS Play Error:", e);
         }
-    };
-    document.getElementById("refresh_record_file_button").onclick = query_record_stream_by_name;
+    }
 
-    let playback_check_box = document.getElementById("playback_check_box");
-    playback_check_box.checked = getCookie("playback", "false") === "true";
-    playback_check_box.onchange = function (e) {
-        setCookie("playback", playback_check_box.checked);
-    };
+    // --- 流列表发现 ---
+    async function fetchActiveStreams() {
+        const query = utils.parseQuery();
+        const protocol = window.location.protocol;
+        const apiPort = protocol === "http:" ? ":1985" : "";
+        const apiUrl = `${protocol}//${query.hostname}${apiPort}/api/v1/streams/`;
 
-    function get_record_list(query, stream_name) {
-        let web_protocal = window.location.protocol;
-        let base_url = web_protocal + "//" + query.hostname + (web_protocal == "http:" ? ":11985" : "");
-        let query_url = base_url + "/stream/query_record/" + stream_name;
-        const record_file_list_query = new XMLHttpRequest();
-        console.info(query_url);
-        record_file_list_query.open("GET", query_url);
-        record_file_list_query.send();
+        const $grid = $("#streams_grid");
+        const $selector = $("#user_name");
 
-        let record_request_status = document.getElementById("record_file_request_status");
-        record_request_status.style.display = "";
-        record_file_list_query.onreadystatechange = (e) => {
-            if (record_file_list_query.readyState === 4 && record_file_list_query.status === 200) {
-                record_request_status.style.display = "none";
-                let record_file_list_infos = JSON.parse(record_file_list_query.responseText);
-                let record_file_list_obj = document.getElementById("record_file_list");
-                record_file_list_obj.innerHTML = '';
-                if (record_file_list_infos.stream_name != stream_name) {
-                    return;
-                }
-                record_file_list_infos.files.reverse().forEach((file_info, index, arr) => {
-                    // single file item parent
-                    let file_item = document.createElement("div");
-                    file_item.className = "form-inline";
-                    file_item.style = "text-align: left; border: 1px solid black;";
-                    // preview button
-                    let preview_record_file_button = document.createElement("button");
-                    preview_record_file_button.className = "btn btn-primary previewBtn";
-                    preview_record_file_button.style.width = "10%";
-                    preview_record_file_button.innerHTML = "preview";
-                    preview_record_file_button.id = file_info.file_name + "_preview_btn";
-                    function play_next_call(e, pre_info) {
-                        let enable_countine_play = playback_check_box.checked;
-                        if (!enable_countine_play) { return; }
-                        let next_ele = document.getElementById(pre_info.file_name + "_preview_btn").parentElement.previousElementSibling;
-                        // console.info(e, " info:", pre_info, " next:", next_ele);
-                        if (next_ele == null) { return; }
-                        let btn_list = next_ele.getElementsByClassName("btn");
-                        if (btn_list.length == 0) { return; }
-                        let b = btn_list[0];
-                        b.click();
-                    }
-                    function play_record_file(record_info, btn) {
-                        if (record_info.file_name.split(".").slice(-1) != "mp4") {
-                            alert("仅支持mp4文件预览！");
-                            return;
-                        }
-                        if (sdk) {
-                            sdk.close();
-                            sdk = null;
-                        }
-                        // reset btn
-                        let preview_btn_list = document.getElementsByClassName("previewBtn");
-                        for (let i = 0; i < preview_btn_list.length; i++) {
-                            preview_btn_list[i].innerHTML = "preview";
-                        }
-                        // preview_url = file_url;
-                        let media_player = document.getElementById("rtc_media_player");
-                        // media_player.innerHTML = "";
-                        media_player.style.display = "";
-                        $('#rtc_media_player').prop('srcObject', null);
-                        media_player.src = base_url + "/stream/record/p/" + record_info.file_name;
-                        media_player.onended = function (e) {
-                            play_next_call(e, record_info);
-                        };
-                        btn.innerHTML = "on playing";
-                    }
-                    preview_record_file_button.addEventListener("click", function () {
-                        play_record_file(file_info, preview_record_file_button);
-                    });
-                    file_item.appendChild(preview_record_file_button);
-                    file_item.appendChild(document.createTextNode('\n'));
-                    let thumb_pic = document.createElement('img');
-                    thumb_pic.src = "https://alist.3geeks.top/d/recorder/local/temp/img_thump_kylin.jpg";
-                    thumb_pic.style.height = "50px";
-                    file_item.appendChild(thumb_pic);
-                    // download link
-                    let download_link = document.createElement("a");
-                    download_link.href = base_url + "/stream/record/d/" + file_info.file_name;
-                    download_link.download = file_info.file_name;
-                    download_link.innerHTML = file_info.file_name;
-                    download_link.target = "_blank";
-                    download_link.rel = "noopener noreferrer";
-                    file_item.appendChild(download_link);
-                    file_item.appendChild(document.createTextNode('\n'));
-                    // file size info
-                    let file_size_text = document.createElement("text");
-                    file_size_text.style = "text-align: right";
-                    file_size_text.innerHTML = "file size: " + (file_info.file_size / 1024 / 1024).toFixed(2) + "MB";
-                    file_item.appendChild(file_size_text);
-                    record_file_list_obj.appendChild(file_item);
-                });
-            } else if (record_file_list_query.readyState === 4) {
-                record_request_status.style.display = "none";
-                alert(record_file_list_query.responseText);
+        try {
+            const response = await fetch(apiUrl);
+            const data = await response.json();
+            
+            $grid.empty();
+            $selector.html('<option value="livestream">Default</option>');
+
+            if (!data.streams || data.streams.length === 0) {
+                $grid.append('<div class="col-span-full text-center py-4 text-slate-500 italic text-sm">暂无在线活跃流</div>');
+                return;
             }
+
+            data.streams.forEach(stream => {
+                if (!stream.publish.active) return;
+
+                const audiences = stream.clients - 1;
+                const coverUrl = `/stream/cover/${stream.name}`;
+                
+                const btnHtml = `
+                    <button class="group relative overflow-hidden bg-slate-800/50 hover:bg-blue-600/20 border border-slate-700 hover:border-blue-500/50 p-3 rounded-2xl transition-all duration-300 text-left">
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="text-blue-400 font-bold text-sm truncate">${stream.name}</span>
+                            <span class="text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400">👥 ${audiences}</span>
+                        </div>
+                        <img src="${coverUrl}" class="w-full h-20 object-cover rounded-lg bg-slate-900 mb-2 opacity-80 group-hover:opacity-100 transition-opacity" onerror="this.src='https://ossrs.net/gif/v1/sls.gif'">
+                        <div class="text-[10px] text-slate-500 group-hover:text-blue-300 transition-colors uppercase font-bold tracking-tighter">点击切换</div>
+                    </button>
+                `;
+
+                const $btn = $(btnHtml).click(() => {
+                    $("#txt_url").val(stream.name); 
+                    srs_init_rtc("#txt_url", { ...query, stream: stream.name });
+                    $selector.val(stream.name);
+                    startPlay();
+                });
+
+                $grid.append($btn);
+                $selector.append(`<option value="${stream.name}">${stream.name}</option>`);
+            });
+        } catch (e) {
+            console.warn("Fetch streams failed:", e);
         }
     }
 
-    $("#btn_play").click(function () {
-        on_click_start_play();
-    });
-    $("#user_name").change(function () {
-        update_stream_url(query, $("#user_name").val());
-    });
+    // --- 录制文件管理 ---
+    async function fetchRecordings() {
+        const streamName = $("#record_stream_name").val();
+        if (!streamName) return;
 
-    function add_refresh_stream_list_button(url) {
-        // add refresh button
-        let streams_list = document.getElementById("streams_grid");
-        let user_name_selector = document.getElementById("user_name");
-        // let refresh_button = document.createElement("button");
-        let refresh_button = document.getElementById("refresh_streams_btn");
-        streams_list.style.gap = "1vh";
-        refresh_button.className = "btn btn-primary";
-        refresh_button.innerHTML = "刷新";
-        refresh_button.onclick = function () {
-            // clear list
-            streams_list.innerHTML = "";
-            user_name_selector.innerHTML = "";
-            // <option value="livestream">default</option>
-            let default_option = document.createElement("option");
-            default_option.value = "livestream";
-            default_option.innerHTML = "default";
-            user_name_selector.appendChild(default_option);
-            find_streams_page(url);
-        };
-        // streams_list.appendChild(refresh_button);
-    };
+        const query = utils.parseQuery();
+        const protocol = window.location.protocol;
+        const apiPort = protocol === "http:" ? ":11985" : "";
+        const apiUrl = `${protocol}//${query.hostname}${apiPort}/stream/query_record/${streamName}`;
+        const baseUrl = `${protocol}//${query.hostname}${apiPort}`;
 
-    function find_streams_page(url) {
-        const Http = new XMLHttpRequest();
-        Http.open("GET", url);
-        Http.send();
+        const $status = $("#record_file_request_status").show();
+        const $list = $("#record_file_list").empty();
 
-        Http.onreadystatechange = (e) => {
-            if (Http.readyState === 4 && Http.status === 200) {
-                // add_refresh_stream_list_button(url);
-                // console.log(Http.responseText);
-                let streams_list = document.getElementById("streams_grid");
-                let user_name_selector = document.getElementById("user_name");
-                let server_streams_status = JSON.parse(Http.responseText);
-                console.log(server_streams_status);
-                server_streams_status.streams.forEach((stream, index, arr) => {
-                    if (!stream.publish.active) {
-                        return;
-                    }
-                    let audiences = stream.clients - 1;
-                    let new_button = document.createElement("button");
-                    new_button.className = "btn btn-primary";
-                    new_button.innerHTML = stream.name + "<img src=\"/stream/cover/" + stream.name + "\">" + "<br>👥 " + audiences;
-                    console.info(stream.name + '\'s audiences: ', audiences);
-                    new_button.onclick = function () {
-                        console.info("button click");
-                        // update_stream_url(query, $(this).text());
-                        update_stream_url(query, stream.name);
-                        // console.info("stream name:", stream.name);
-                        on_click_start_play();
+        try {
+            const response = await fetch(apiUrl);
+            const data = await response.json();
+            $status.hide();
+
+            if (!data.files || data.files.length === 0) {
+                $list.append('<li class="p-6 text-slate-500 text-center italic text-xs">未找到该流的录制分片</li>');
+                return;
+            }
+
+            data.files.forEach(file => {
+                const isMp4 = file.file_name.toLowerCase().endsWith(".mp4");
+                const fileSize = (file.file_size / 1024 / 1024).toFixed(2);
+                
+                const itemHtml = `
+                    <li class="flex items-center gap-4 p-4 hover:bg-slate-800/30 transition-colors group">
+                        <button class="play-btn shrink-0 w-10 h-10 flex items-center justify-center bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-full transition-all border border-blue-500/20">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        </button>
+                        <div class="flex-grow min-w-0">
+                            <div class="text-sm font-medium text-slate-300 truncate">${file.file_name}</div>
+                            <div class="flex gap-3 mt-1">
+                                <a href="${baseUrl}/stream/record/d/${file.file_name}" target="_blank" class="text-[10px] text-blue-400 hover:underline uppercase font-bold tracking-tighter">下载分片</a>
+                                <span class="text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Size: ${fileSize} MB</span>
+                            </div>
+                        </div>
+                        <img src="https://alist.3geeks.top/d/recorder/local/temp/img_thump_kylin.jpg" class="h-10 w-16 object-cover rounded border border-slate-700" onerror="this.style.display='none'">
+                    </li>
+                `;
+
+                const $item = $(itemHtml);
+                $item.find('.play-btn').click(function() {
+                    if (!isMp4) return alert("仅支持 MP4 格式预览");
+                    
+                    if (sdk) { sdk.close(); sdk = null; }
+                    const video = document.getElementById("rtc_media_player");
+                    video.srcObject = null;
+                    video.src = `${baseUrl}/stream/record/p/${file.file_name}`;
+                    
+                    // 逆序连播逻辑：UI 从上往下是“从新到旧”。
+                    // 点击 playlist 连播时，播放完当前项，自动触发其“下一个”兄弟节点（即更早的文件）。
+                    video.onended = () => {
+                        if ($("#playback_check_box").is(":checked")) {
+                            const $nextItem = $item.next();
+                            if ($nextItem.length > 0) {
+                                console.info("Playlist: Playing next older segment...");
+                                $nextItem.find('.play-btn').click();
+                            } else {
+                                console.info("Playlist: Reached end of recorded segments.");
+                            }
+                        }
                     };
-                    streams_list.appendChild(new_button);
-                    // add to user option
-                    let new_option = document.createElement("option");
-                    new_option.value = stream.name;
-                    new_option.innerHTML = stream.name;
-                    user_name_selector.appendChild(new_option);
+                    
+                    // 视觉激活状态
+                    $("#record_file_list .play-btn").removeClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]').addClass('bg-blue-600/10 text-blue-400');
+                    $(this).addClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]').removeClass('bg-blue-600/10 text-blue-400');
                 });
-            }
-        }
-        add_refresh_stream_list_button(url);
-    };
 
-    console.info(query);
-    let web_protocal = window.location.protocol;
-    find_streams_page(web_protocal + "//" + query.hostname + (web_protocal == "http:" ? ":1985" : "") + "/api/v1/streams/");
+                $list.append($item);
+            });
+        } catch (e) {
+            $status.hide();
+            console.error("Fetch records failed:", e);
+        }
+    }
 
-    if (query.autostart === 'true') {
-        $('#rtc_media_player').prop('muted', true);
-        console.warn('For autostart, we should mute it, see https://www.jianshu.com/p/c3c6944eed5a ' +
-            'or https://developers.google.com/web/updates/2017/09/autoplay-policy-changes#audiovideo_elements');
-        window.addEventListener("load", function () { startPlay(); });
-    }
-    // Part 1:
-    var vid = document.getElementById("rtc_media_player");
-    var last_media_time, last_frame_num;
-    var last_metadata = null;
-    let frame_info_rounder = [];
-    class FrameInfo {
-        constructor(diff, time) {
-            this.diff = diff;
-            this.time = time;
-        }
-    }
-    // Part 2 (with some modifications):
-    function frameBeginCallback(nowMs, metaData) {
-        let media_time_diff = Math.abs(metaData.mediaTime - last_media_time);
-        let frame_num_diff = Math.abs(metaData.presentedFrames - last_frame_num);
-        let diff = 0;
-        if (frame_num_diff !== 0) {
-            diff = media_time_diff / frame_num_diff;
-        }
-        if (diff) {
-            frame_info_rounder.push(new FrameInfo(frame_num_diff, Date.now()));
-        }
-        last_media_time = metaData.mediaTime;
-        last_frame_num = metaData.presentedFrames;
-        last_metadata = metaData;
-        // console.info(nowMs);
-        // console.info(metaData);
-        // For graph purposes, take the maximum over a window.
-        if (metaData.receiveTime != null) {
-            maxRenderTime = Math.max(metaData.expectedDisplayTime - metaData.receiveTime, maxRenderTime);
-            if (metaData.presentedFrames % windowSize === 0) {
-                timeSeries.addPoint(Date.now(), maxRenderTime);
-                timeGraph.setDataSeries([timeSeries]);
-                timeGraph.updateEndDate();
+    // --- WebRTC 统计处理 ---
+    let lastStats = { audio: { ts: 0, bytes: 0 }, video: { ts: 0, bytes: 0 }, rtt: { rcv: 0, total: 0 } };
 
-                maxRenderTime = -1;
-            }
-        }
-        vid.requestVideoFrameCallback(frameBeginCallback);
-    }
-    vid.requestVideoFrameCallback(frameBeginCallback);
-    // Part 3:
-    vid.addEventListener("seeked", function () {
-        frame_info_rounder.pop();
-    });
-    // Part 4:
-    function update_frame_info(fps, width, height) {
-        document.getElementById("frame_info").textContent = "Video Info: " + width + "x" + height + ", " + fps + "FPS";
-    }
-    let audio_bytes_pre;
-    let video_bytes_pre;
-    let audio_ts_pre;
-    let video_ts_pre;
-    let total_rtt_pre;
-    let responses_rev_pre;
-    function showRemoteStats(results) {
-        // calculate video bitrate
-        let audio_bps = "0";
-        let video_bps = "0";
-        let rtt = NaN;
+    function processStats(results) {
+        let vBps = 0, aBps = 0, rtt = 0;
+
         results.forEach(report => {
             const now = report.timestamp;
-            if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+            if (report.type === 'inbound-rtp') {
+                const type = report.mediaType; 
                 const bytes = report.bytesReceived;
-                if (video_ts_pre && (now !== video_ts_pre)) {
-                    video_bps = 8 * (bytes - video_bytes_pre) / (now - video_ts_pre);
-                    video_bps = Math.floor(video_bps);
+                const last = lastStats[type];
+
+                if (last.ts && now > last.ts) {
+                    const bps = Math.floor((8 * (bytes - last.bytes)) / (now - last.ts));
+                    if (type === 'video') vBps = bps; else aBps = bps;
                 }
-                video_bytes_pre = bytes;
-                video_ts_pre = now;
-                // console.info(report);
-            } else if (report.type === 'inbound-rtp' && report.mediaType === 'audio') {
-                const bytes = report.bytesReceived;
-                if (audio_ts_pre && (now !== audio_ts_pre)) {
-                    audio_bps = 8 * (bytes - audio_bytes_pre) / (now - audio_ts_pre);
-                    audio_bps = Math.floor(audio_bps);
+                lastStats[type] = { ts: now, bytes: bytes };
+            } else if (report.type === 'candidate-pair' && report.responsesReceived > 0) {
+                const lastRtt = lastStats.rtt;
+                if (lastRtt.rcv && report.responsesReceived > lastRtt.rcv) {
+                    rtt = (report.totalRoundTripTime - lastRtt.total) / (report.responsesReceived - lastRtt.rcv);
                 }
-                audio_bytes_pre = bytes;
-                audio_ts_pre = now;
-                // console.info(report);
-            } else if (report.type === 'candidate-pair' && report.responsesReceived !== 0) {
-                if (total_rtt_pre && (report.responsesReceived !== responses_rev_pre)) {
-                    rtt = (report.totalRoundTripTime - total_rtt_pre) / (report.responsesReceived - responses_rev_pre);
-                }
-                total_rtt_pre = report.totalRoundTripTime;
-                responses_rev_pre = report.responsesReceived;
-                // console.info(report);
+                lastStats.rtt = { rcv: report.responsesReceived, total: report.totalRoundTripTime };
             }
         });
-        audio_bps += 'kbps';
-        video_bps += 'kbps';
-        // console.info(results);
-        document.getElementById("bitrate_info").textContent = `video:${video_bps} audio:${audio_bps}`;
-        let date_now = Date.now();
-        // rtt
-        if (rtt !== NaN) {
-            networkDelaySeries.addPoint(date_now, rtt * 1000);
+
+        $("#bitrate_info").text(`V: ${vBps}kbps | A: ${aBps}kbps`);
+        if (rtt > 0) {
+            const nowMs = Date.now();
+            networkDelaySeries.addPoint(nowMs, rtt * 1000);
             networkDelayGraph.setDataSeries([networkDelaySeries]);
             networkDelayGraph.updateEndDate();
         }
     }
-    setInterval(function () {
-        if (sdk) {
-            sdk.pc.getStats(null)
-                .then(showRemoteStats, err => console.log(err));
+
+    // --- 视频帧回调 (FPS) ---
+    function frameCallback(nowMs, meta) {
+        const vid = document.getElementById("rtc_media_player");
+        if (meta.receiveTime) {
+            maxRenderTime = Math.max(meta.expectedDisplayTime - meta.receiveTime, maxRenderTime);
+            if (meta.presentedFrames % windowSize === 0) {
+                timeSeries.addPoint(Date.now(), maxRenderTime);
+                timeGraph.setDataSeries([timeSeries]);
+                timeGraph.updateEndDate();
+                maxRenderTime = -1;
+            }
+        }
+        frameInfoRounder.push({ time: Date.now() });
+        vid.requestVideoFrameCallback(frameCallback);
+    }
+
+    // --- 事件绑定 ---
+    $("#btn_play").click(() => startPlay());
+    $("#refresh_streams_btn").click(() => fetchActiveStreams());
+    $("#btn_set_max_delay").click(() => applyPlayoutDelay());
+    $("#refresh_record_file_button").click(() => fetchRecordings());
+    
+    $("#user_name").change(function() {
+        const name = $(this).val();
+        $("#record_stream_name").val(name);
+        srs_init_rtc("#txt_url", { ...utils.parseQuery(), stream: name });
+        fetchRecordings(); // 切换用户下拉框也同步刷新录制
+    });
+
+    // 定时刷新器
+    setInterval(() => {
+        if (sdk && sdk.pc) {
+            sdk.pc.getStats(null).then(processStats).catch(console.error);
         }
     }, 500);
-    setInterval(function () {
-        if (vid.played.length === 0) {
-            return;
+
+    setInterval(() => {
+        const now = Date.now();
+        while (frameInfoRounder.length > 0 && now - frameInfoRounder[0].time > 1000) {
+            frameInfoRounder.shift();
         }
-        let now_ms = Date.now();
-        while (frame_info_rounder.length > 0 && now_ms - frame_info_rounder[0].time > 1000) {
-            frame_info_rounder.shift();
+        const fps = frameInfoRounder.length;
+        const video = document.getElementById("rtc_media_player");
+        $("#frame_info").text(`${video.videoWidth || 0}x${video.videoHeight || 0} @ ${fps}FPS`);
+        
+        if (fpsGraph && fps > 0) {
+            fpsSeries.addPoint(now, fps);
+            fpsGraph.setDataSeries([fpsSeries]);
+            fpsGraph.updateEndDate();
         }
-        let fps = frame_info_rounder.length;
-        let width = last_metadata == null ? 0 : last_metadata.width;
-        let height = last_metadata == null ? 0 : last_metadata.height;
-        update_frame_info(fps, width, height);
-        fpsSeries.addPoint(Date.now(), Math.round(fps));
-        fpsGraph.setDataSeries([fpsSeries]);
-        fpsGraph.updateEndDate();
-    }, 200);
+    }, 1000);
+
+    // --- 初始加载 ---
+    const query = utils.parseQuery();
+    srs_init_rtc("#txt_url", query);
+    initStatusGraphs();
+    fetchActiveStreams();
+
+    if (query.autostart === 'true') {
+        $('#rtc_media_player').prop('muted', true);
+        startPlay();
+    }
+
+    document.getElementById("rtc_media_player").requestVideoFrameCallback(frameCallback);
 });
