@@ -76,6 +76,22 @@
                 <!-- 这里由脚本动态填充流列表 -->
                 点击刷新以获取当前可用流...
             </div>
+            <!-- 用于 JS 克隆的流卡片模板 -->
+            <template id="stream_card_template">
+                <button
+                    class="group relative overflow-hidden bg-slate-800/50 hover:bg-blue-600/20 border border-slate-700 hover:border-blue-500/50 p-3 rounded-2xl transition-all duration-300 text-left">
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="stream-name text-blue-400 font-bold text-sm truncate"></span>
+                        <span class="audience-count text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400"></span>
+                    </div>
+                    <img class="cover-img w-full h-20 object-cover rounded-lg bg-slate-900 mb-2 opacity-80 group-hover:opacity-100 transition-opacity"
+                        onerror="this.src='https://ossrs.net/gif/v1/sls.gif'">
+                    <div
+                        class="text-[10px] text-slate-500 group-hover:text-blue-300 transition-colors uppercase font-bold tracking-tighter">
+                        点击切换
+                    </div>
+                </button>
+            </template>
         </section>
 
         <!-- 3. 控制与配置面板 -->
@@ -168,6 +184,30 @@
                 <ul id="record_file_list" class="max-h-52 overflow-y-auto custom-scrollbar border border-white/5 rounded-2xl divide-y divide-white/5 bg-slate-900/20">
                     <li class="p-6 text-slate-500 text-center italic text-xs">No recorded segments found.</li>
                 </ul>
+                <!-- 用于 JS 克隆的录制文件条目模板 -->
+                <template id="record_file_item_template">
+                    <li class="flex items-center gap-4 p-4 hover:bg-slate-800/30 transition-colors group">
+                        <button
+                            class="play-btn shrink-0 w-10 h-10 flex items-center justify-center bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-full transition-all border border-blue-500/20">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
+                        </button>
+                        <div class="flex-grow min-w-0">
+                            <div class="file-name text-sm font-medium text-slate-300 truncate"></div>
+                            <div class="flex gap-3 mt-1">
+                                <a class="download-link text-[10px] text-blue-400 hover:underline uppercase font-bold tracking-tighter"
+                                    target="_blank">
+                                    下载分片
+                                </a>
+                                <span class="file-size text-[10px] text-slate-500 uppercase font-bold tracking-tighter"></span>
+                            </div>
+                        </div>
+                        <img class="thumb-img h-10 w-16 object-cover rounded border border-slate-700"
+                            src="https://alist.3geeks.top/d/recorder/local/temp/img_thump_kylin.jpg"
+                            onerror="this.style.display='none'">
+                    </li>
+                </template>
             </div>
 
             <div class="glass-card p-8 rounded-3xl shadow-lg border border-white/5 flex flex-col justify-between group">

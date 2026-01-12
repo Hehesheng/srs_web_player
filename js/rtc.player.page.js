@@ -119,25 +119,27 @@ $(function () {
                 return;
             }
 
+            const template = document.getElementById("stream_card_template");
+            if (!template || !template.content.firstElementChild) {
+                console.warn("stream_card_template not found, skip rendering.");
+                return;
+            }
+
             data.streams.forEach(stream => {
                 if (!stream.publish.active) return;
 
                 const audiences = stream.clients - 1;
                 const coverUrl = `/stream/cover/${stream.name}`;
-                
-                const btnHtml = `
-                    <button class="group relative overflow-hidden bg-slate-800/50 hover:bg-blue-600/20 border border-slate-700 hover:border-blue-500/50 p-3 rounded-2xl transition-all duration-300 text-left">
-                        <div class="flex justify-between items-start mb-2">
-                            <span class="text-blue-400 font-bold text-sm truncate">${stream.name}</span>
-                            <span class="text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400">👥 ${audiences}</span>
-                        </div>
-                        <img src="${coverUrl}" class="w-full h-20 object-cover rounded-lg bg-slate-900 mb-2 opacity-80 group-hover:opacity-100 transition-opacity" onerror="this.src='https://ossrs.net/gif/v1/sls.gif'">
-                        <div class="text-[10px] text-slate-500 group-hover:text-blue-300 transition-colors uppercase font-bold tracking-tighter">点击切换</div>
-                    </button>
-                `;
 
-                const $btn = $(btnHtml).click(() => {
-                    $("#txt_url").val(stream.name); 
+                const node = template.content.firstElementChild.cloneNode(true);
+                const $btn = $(node);
+
+                $btn.find(".stream-name").text(stream.name);
+                $btn.find(".audience-count").text(`👥 ${audiences}`);
+                $btn.find(".cover-img").attr("src", coverUrl);
+
+                $btn.click(() => {
+                    $("#txt_url").val(stream.name);
                     srs_init_rtc("#txt_url", { ...query, stream: stream.name });
                     $selector.val(stream.name);
                     startPlay();
@@ -175,37 +177,32 @@ $(function () {
                 return;
             }
 
+            const template = document.getElementById("record_file_item_template");
+            if (!template || !template.content.firstElementChild) {
+                console.warn("record_file_item_template not found, skip rendering.");
+                return;
+            }
+
             data.files.forEach(file => {
                 const isMp4 = file.file_name.toLowerCase().endsWith(".mp4");
                 const fileSize = (file.file_size / 1024 / 1024).toFixed(2);
-                
-                const itemHtml = `
-                    <li class="flex items-center gap-4 p-4 hover:bg-slate-800/30 transition-colors group">
-                        <button class="play-btn shrink-0 w-10 h-10 flex items-center justify-center bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-full transition-all border border-blue-500/20">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                        </button>
-                        <div class="flex-grow min-w-0">
-                            <div class="text-sm font-medium text-slate-300 truncate">${file.file_name}</div>
-                            <div class="flex gap-3 mt-1">
-                                <a href="${baseUrl}/stream/record/d/${file.file_name}" target="_blank" class="text-[10px] text-blue-400 hover:underline uppercase font-bold tracking-tighter">下载分片</a>
-                                <span class="text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Size: ${fileSize} MB</span>
-                            </div>
-                        </div>
-                        <img src="https://alist.3geeks.top/d/recorder/local/temp/img_thump_kylin.jpg" class="h-10 w-16 object-cover rounded border border-slate-700" onerror="this.style.display='none'">
-                    </li>
-                `;
 
-                const $item = $(itemHtml);
-                $item.find('.play-btn').click(function() {
+                const node = template.content.firstElementChild.cloneNode(true);
+                const $item = $(node);
+
+                $item.find(".file-name").text(file.file_name);
+                $item.find(".file-size").text(`Size: ${fileSize} MB`);
+                $item.find(".download-link").attr("href", `${baseUrl}/stream/record/d/${file.file_name}`);
+
+                const $playBtn = $item.find(".play-btn");
+                $playBtn.click(function () {
                     if (!isMp4) return alert("仅支持 MP4 格式预览");
-                    
+
                     if (sdk) { sdk.close(); sdk = null; }
                     const video = document.getElementById("rtc_media_player");
                     video.srcObject = null;
                     video.src = `${baseUrl}/stream/record/p/${file.file_name}`;
-                    
-                    // 逆序连播逻辑：UI 从上往下是“从新到旧”。
-                    // 点击 playlist 连播时，播放完当前项，自动触发其“下一个”兄弟节点（即更早的文件）。
+
                     video.onended = () => {
                         if ($("#playback_check_box").is(":checked")) {
                             const $nextItem = $item.next();
@@ -217,10 +214,13 @@ $(function () {
                             }
                         }
                     };
-                    
-                    // 视觉激活状态
-                    $("#record_file_list .play-btn").removeClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]').addClass('bg-blue-600/10 text-blue-400');
-                    $(this).addClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]').removeClass('bg-blue-600/10 text-blue-400');
+
+                    $("#record_file_list .play-btn")
+                        .removeClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]')
+                        .addClass('bg-blue-600/10 text-blue-400');
+                    $(this)
+                        .addClass('bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.4)]')
+                        .removeClass('bg-blue-600/10 text-blue-400');
                 });
 
                 $list.append($item);
