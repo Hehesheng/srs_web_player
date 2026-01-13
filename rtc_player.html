@@ -11,7 +11,7 @@
     <script type="text/javascript" src="js/winlin.utility.js"></script>
     <script type="text/javascript" src="js/srs.page.js"></script>
     <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/alfg/ping.js@0.2.2/dist/ping.min.js"></script>
-    <script src="js/third_party/graph.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
@@ -24,6 +24,17 @@
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
             gap: 1rem;
+        }
+        /* Chart.js 图表样式优化 */
+        .graph-container {
+            transition: all 0.3s ease;
+        }
+        .graph-container:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(59, 130, 246, 0.15);
+        }
+        .graph-container canvas {
+            background: transparent !important;
         }
     </style>
 </head>
@@ -150,16 +161,28 @@
                 Real-time Analysis
             </h3>
             <div id="stats_info" class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div class="bg-slate-900/60 p-5 rounded-2xl border border-white/5" id="networkDelayGraph">
-                    <div class="text-[10px] text-slate-400 mb-3 font-bold uppercase tracking-widest">Network Latency (ms)</div>
+                <div class="graph-container bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-5 rounded-2xl border border-blue-500/20 shadow-lg"
+                    id="networkDelayGraph">
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></div>
+                        <div class="text-[10px] text-blue-300 font-bold uppercase tracking-widest">Network Latency (ms)</div>
+                    </div>
                     <canvas id="networkDelayCanvas"></canvas>
                 </div>
-                <div class="bg-slate-900/60 p-5 rounded-2xl border border-white/5" id="timeGraph">
-                    <div class="text-[10px] text-slate-400 mb-3 font-bold uppercase tracking-widest">Render Delay (ms)</div>
+                <div class="graph-container bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-5 rounded-2xl border border-emerald-500/20 shadow-lg"
+                    id="timeGraph">
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
+                        <div class="text-[10px] text-emerald-300 font-bold uppercase tracking-widest">Render Delay (ms)</div>
+                    </div>
                     <canvas id="timeCanvas"></canvas>
                 </div>
-                <div class="bg-slate-900/60 p-5 rounded-2xl border border-white/5" id="fpsGraph">
-                    <div class="text-[10px] text-slate-400 mb-3 font-bold uppercase tracking-widest">Frames Per Second</div>
+                <div class="graph-container bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-5 rounded-2xl border border-violet-500/20 shadow-lg"
+                    id="fpsGraph">
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse"></div>
+                        <div class="text-[10px] text-violet-300 font-bold uppercase tracking-widest">Frames Per Second</div>
+                    </div>
                     <canvas id="fpsCanvas"></canvas>
                 </div>
             </div>

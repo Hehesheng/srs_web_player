@@ -6,13 +6,54 @@
  */
 $(function () {
     let sdk = null;
-    let fpsGraph, fpsSeries;
-    let timeGraph, timeSeries;
-    let networkDelayGraph, networkDelaySeries;
+    let fpsChart, timeChart, networkDelayChart;
 
     let maxRenderTime = -1;
     const windowSize = 30;
     const frameInfoRounder = [];
+
+    // Chart.js 配置常量
+    const MAX_DATA_POINTS = 60; // 保留最近60个数据点
+    const CHART_COMMON_CONFIG = {
+        type: 'line',
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 200 },
+            plugins: {
+                legend: { display: false },
+                tooltip: { enabled: false }
+            },
+            scales: {
+                x: {
+                    display: false
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: {
+                        color: 'rgba(148, 163, 184, 0.1)',
+                        drawBorder: false
+                    },
+                    ticks: {
+                        color: 'rgba(148, 163, 184, 0.6)',
+                        font: { size: 10 },
+                        maxTicksLimit: 5
+                    }
+                }
+            },
+            elements: {
+                line: {
+                    tension: 0.4,
+                    borderWidth: 2
+                },
+                point: {
+                    radius: 0,
+                    hitRadius: 10,
+                    hoverRadius: 4
+                }
+            }
+        }
+    };
 
     // --- 工具函数 ---
     const utils = {
@@ -26,19 +67,72 @@ $(function () {
 
     // --- 初始化监控图表 ---
     function initStatusGraphs() {
-        if (fpsGraph) return; 
+        if (fpsChart) return;
 
-        fpsSeries = new TimelineDataSeries();
-        fpsGraph = new TimelineGraphView('fpsGraph', 'fpsCanvas');
-        fpsGraph.setScale(100);
+        // FPS 图表 - 紫色主题
+        const fpsCtx = document.getElementById('fpsCanvas').getContext('2d');
+        fpsChart = new Chart(fpsCtx, {
+            ...CHART_COMMON_CONFIG,
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'FPS',
+                    data: [],
+                    borderColor: '#a78bfa',
+                    backgroundColor: 'rgba(167, 139, 250, 0.1)',
+                    fill: true
+                }]
+            }
+        });
 
-        timeSeries = new TimelineDataSeries();
-        timeGraph = new TimelineGraphView('timeGraph', 'timeCanvas');
-        timeGraph.setScale(200);
+        // 渲染延迟图表 - 绿色主题
+        const timeCtx = document.getElementById('timeCanvas').getContext('2d');
+        timeChart = new Chart(timeCtx, {
+            ...CHART_COMMON_CONFIG,
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Render Delay',
+                    data: [],
+                    borderColor: '#34d399',
+                    backgroundColor: 'rgba(52, 211, 153, 0.1)',
+                    fill: true
+                }]
+            }
+        });
 
-        networkDelaySeries = new TimelineDataSeries();
-        networkDelayGraph = new TimelineGraphView('networkDelayGraph', 'networkDelayCanvas');
-        networkDelayGraph.setScale(200);
+        // 网络延迟图表 - 蓝色主题
+        const networkCtx = document.getElementById('networkDelayCanvas').getContext('2d');
+        networkDelayChart = new Chart(networkCtx, {
+            ...CHART_COMMON_CONFIG,
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Network Latency',
+                    data: [],
+                    borderColor: '#60a5fa',
+                    backgroundColor: 'rgba(96, 165, 250, 0.1)',
+                    fill: true
+                }]
+            }
+        });
+    }
+
+    // 更新图表数据的辅助函数
+    function updateChartData(chart, value) {
+        const data = chart.data.datasets[0].data;
+        const labels = chart.data.labels;
+
+        data.push(value);
+        labels.push('');
+
+        // 限制数据点数量
+        if (data.length > MAX_DATA_POINTS) {
+            data.shift();
+            labels.shift();
+        }
+
+        chart.update('none'); // 'none' 模式跳过动画，提升性能
     }
 
     // --- 播放器延迟设置 ---
@@ -259,11 +353,8 @@ $(function () {
         });
 
         $("#bitrate_info").text(`V: ${vBps}kbps | A: ${aBps}kbps`);
-        if (rtt > 0) {
-            const nowMs = Date.now();
-            networkDelaySeries.addPoint(nowMs, rtt * 1000);
-            networkDelayGraph.setDataSeries([networkDelaySeries]);
-            networkDelayGraph.updateEndDate();
+        if (rtt > 0 && networkDelayChart) {
+            updateChartData(networkDelayChart, Math.round(rtt * 1000));
         }
     }
 
@@ -272,10 +363,8 @@ $(function () {
         const vid = document.getElementById("rtc_media_player");
         if (meta.receiveTime) {
             maxRenderTime = Math.max(meta.expectedDisplayTime - meta.receiveTime, maxRenderTime);
-            if (meta.presentedFrames % windowSize === 0) {
-                timeSeries.addPoint(Date.now(), maxRenderTime);
-                timeGraph.setDataSeries([timeSeries]);
-                timeGraph.updateEndDate();
+            if (meta.presentedFrames % windowSize === 0 && timeChart) {
+                updateChartData(timeChart, Math.round(maxRenderTime));
                 maxRenderTime = -1;
             }
         }
@@ -312,10 +401,8 @@ $(function () {
         const video = document.getElementById("rtc_media_player");
         $("#frame_info").text(`${video.videoWidth || 0}x${video.videoHeight || 0} @ ${fps}FPS`);
         
-        if (fpsGraph && fps > 0) {
-            fpsSeries.addPoint(now, fps);
-            fpsGraph.setDataSeries([fpsSeries]);
-            fpsGraph.updateEndDate();
+        if (fpsChart && fps > 0) {
+            updateChartData(fpsChart, fps);
         }
     }, 1000);
 
