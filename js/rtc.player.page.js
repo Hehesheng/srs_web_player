@@ -65,6 +65,26 @@ $(function () {
         parseQuery: () => parse_query_string() // 依赖外部 srs.page.js
     };
 
+    // 懒加载观察器 - 用于缩略图按需加载
+    const lazyLoadObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const img = entry.target;
+                const src = img.getAttribute('data-src');
+                if (src) {
+                    img.src = src;
+                    img.removeAttribute('data-src');
+                    img.classList.remove('opacity-0');
+                    img.classList.add('opacity-100');
+                }
+                observer.unobserve(img);
+            }
+        });
+    }, {
+        rootMargin: '100px', // 提前 100px 开始加载
+        threshold: 0.01 // 只要有 1% 可见就触发
+    });
+
     // --- 初始化监控图表 ---
     function initStatusGraphs() {
         if (fpsChart) return;
@@ -292,8 +312,9 @@ $(function () {
                 const thumbEl = $item.find(".thumb-img").get(0);
                 if (thumbEl) {
                     if (file.thumb_url) {
-                        thumbEl.src = `${baseUrl}${file.thumb_url}`;
-                        thumbEl.style.display = 'block';
+                        thumbEl.setAttribute('data-src', `${baseUrl}${file.thumb_url}`);
+                        thumbEl.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+                        lazyLoadObserver.observe(thumbEl); // 注册懒加载
                     } else {
                         thumbEl.style.display = 'none';
                     }
