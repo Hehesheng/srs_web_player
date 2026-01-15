@@ -286,16 +286,26 @@ $(function () {
 
                 $item.find(".file-name").text(file.file_name);
                 $item.find(".file-size").text(`Size: ${fileSize} MB`);
-                $item.find(".download-link").attr("href", `${baseUrl}/stream/record/d/${file.file_name}`);
+                $item.find(".download-link").attr("href", `${baseUrl}${file.download_url}`);
 
                 const $playBtn = $item.find(".play-btn");
+                const thumbEl = $item.find(".thumb-img").get(0);
+                if (thumbEl) {
+                    if (file.thumb_url) {
+                        thumbEl.src = `${baseUrl}${file.thumb_url}`;
+                        thumbEl.style.display = 'block';
+                    } else {
+                        thumbEl.style.display = 'none';
+                    }
+                }
+
                 $playBtn.click(function () {
                     if (!isMp4) return alert("仅支持 MP4 格式预览");
 
                     if (sdk) { sdk.close(); sdk = null; }
                     const video = document.getElementById("rtc_media_player");
                     video.srcObject = null;
-                    video.src = `${baseUrl}/stream/record/p/${file.file_name}`;
+                    video.src = `${baseUrl}${file.player_url}`;
 
                     video.onended = () => {
                         if ($("#playback_check_box").is(":checked")) {
