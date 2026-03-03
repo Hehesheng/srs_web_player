@@ -471,40 +471,33 @@
                 sdk.ontrack && sdk.ontrack({track: track});
             });
 
-            // 设置视频编码参数: 5Mbps CBR 码率，禁用 B 帧 (baseline profile)
-            var senders = sdk.pc.getSenders();
             var targetBitrate = 5000000; // 5 Mbps
-            for (var i = 0; i < senders.length; i++) {
-                var sender = senders[i];
-                if (sender.track && sender.track.kind === 'video') {
-                    var params = sender.getParameters();
-                    if (!params.encodings || params.encodings.length === 0) {
-                        params.encodings = [{}];
-                    }
-                    // CBR 模式: maxBitrate = minBitrate 实现恒定码率
-                    params.encodings[0].maxBitrate = targetBitrate;
-                    params.encodings[0].scaleResolutionDownBy = 1.0;
-                    await sender.setParameters(params);
-                }
-            }
             
-            // 使用 SDP munging 进一步强制 CBR (x-google-max-bitrate/min-bitrate)
-            var enforceCBR = function(sdp) {
+            // SDP munging: 添加码率限制到 H264 编解码器
+            var enforceBitrate = function(sdp) {
                 var lines = sdp.split('\r\n');
                 var result = [];
+                var inVideoSection = false;
+                var bitrateKbps = Math.floor(targetBitrate / 1000);
+                
                 for (var i = 0; i < lines.length; i++) {
                     var line = lines[i];
-                    result.push(line);
-                    // 在 video m= 行后的 a=fmtp 行添加码率限制
-                    if (line.indexOf('a=fmtp:') === 0 && line.indexOf('apt=') === -1) {
-                        // 检查是否已有 x-google 参数
-                        if (line.indexOf('x-google') === -1) {
-                            var bitrateKbps = Math.floor(targetBitrate / 1000);
-                            result[result.length - 1] = line + ';x-google-max-bitrate=' + bitrateKbps + 
-                                ';x-google-min-bitrate=' + bitrateKbps + 
-                                ';x-google-start-bitrate=' + bitrateKbps;
-                        }
+                    
+                    if (line.indexOf('m=video') === 0) {
+                        inVideoSection = true;
+                    } else if (line.indexOf('m=') === 0) {
+                        inVideoSection = false;
                     }
+                    
+                    // 只修改视频部分的 H264 fmtp 行
+                    if (inVideoSection && line.indexOf('a=fmtp:') === 0 && 
+                        line.indexOf('profile-level-id') > 0 && line.indexOf('x-google') === -1) {
+                        line = line + ';x-google-max-bitrate=' + bitrateKbps + 
+                            ';x-google-min-bitrate=' + bitrateKbps + 
+                            ';x-google-start-bitrate=' + bitrateKbps;
+                    }
+                    
+                    result.push(line);
                 }
                 return result.join('\r\n');
             };
@@ -518,12 +511,10 @@
                 // 创建 offer
                 var offer = await sdk.pc.createOffer();
                 
-                // 修改 SDP: 强制使用 H.264 Baseline Profile (无 B 帧) + CBR
+                // 修改 SDP: 强制使用 H.264 Baseline Profile (无 B 帧) + 码率限制
                 var modifiedSdp = offer.sdp;
-                // 将 profile-level-id 修改为 42e01f (Constrained Baseline)
                 modifiedSdp = modifiedSdp.replace(/profile-level-id=([0-9a-fA-F]+)/g, 'profile-level-id=42e01f');
-                // 应用 CBR 码率限制
-                modifiedSdp = enforceCBR(modifiedSdp);
+                modifiedSdp = enforceBitrate(modifiedSdp);
                 offer.sdp = modifiedSdp;
                 
                 await sdk.pc.setLocalDescription(offer);
@@ -552,6 +543,21 @@
                 await sdk.pc.setRemoteDescription(
                     new RTCSessionDescription({type: 'answer', sdp: session.sdp})
                 );
+                
+                // 协商完成后设置编码参数 (setParameters 必须在协商后调用)
+                var senders = sdk.pc.getSenders();
+                for (var i = 0; i < senders.length; i++) {
+                    var sender = senders[i];
+                    if (sender.track && sender.track.kind === 'video') {
+                        var params = sender.getParameters();
+                        if (params.encodings && params.encodings.length > 0) {
+                            params.encodings[0].maxBitrate = targetBitrate;
+                            params.encodings[0].scaleResolutionDownBy = 1.0;
+                            await sender.setParameters(params);
+                            console.log('Video encoding params set:', params.encodings[0]);
+                        }
+                    }
+                }
 
                 // 更新 UI
                 $('#sessionid').text(session.sessionid);

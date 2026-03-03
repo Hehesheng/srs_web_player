@@ -326,7 +326,6 @@ function SrsRtcPlayerAsync() {
             
             var answerSections = {};
             var answerLines = answerSdp.split('\r\n');
-            var currentSection = 'session';
             var sessionLines = [];
             var currentMLines = [];
             var currentType = null;
@@ -351,22 +350,13 @@ function SrsRtcPlayerAsync() {
                 sessionLines = currentMLines;
             }
             
-            // Update BUNDLE to include all m-lines
-            var bundleMids = [];
-            for (var i = 0; i < offerMLines.length; i++) {
-                bundleMids.push(String(i));
-            }
-            for (var i = 0; i < sessionLines.length; i++) {
-                if (sessionLines[i].indexOf('a=group:BUNDLE') === 0) {
-                    sessionLines[i] = 'a=group:BUNDLE ' + bundleMids.join(' ');
-                }
-            }
+            var activeMids = [];
+            var result = [];
             
-            var result = sessionLines.slice();
             for (var i = 0; i < offerMLines.length; i++) {
                 var type = offerMLines[i];
                 if (answerSections[type]) {
-                    // Fix mid to match offer order
+                    activeMids.push(String(i));
                     var section = answerSections[type].slice();
                     for (var j = 0; j < section.length; j++) {
                         if (section[j].indexOf('a=mid:') === 0) {
@@ -375,17 +365,20 @@ function SrsRtcPlayerAsync() {
                     }
                     result = result.concat(section);
                 } else {
-                    // Add rejected m-line (port 0) for missing media
                     result.push('m=' + type + ' 0 UDP/TLS/RTP/SAVPF 0');
                     result.push('c=IN IP4 0.0.0.0');
                     result.push('a=mid:' + i);
-                    if (type === 'audio') {
-                        result.push('a=rtpmap:0 PCMU/8000');
-                    }
+                    result.push('a=inactive');
                 }
             }
             
-            return result.join('\r\n');
+            for (var i = 0; i < sessionLines.length; i++) {
+                if (sessionLines[i].indexOf('a=group:BUNDLE') === 0) {
+                    sessionLines[i] = 'a=group:BUNDLE ' + activeMids.join(' ');
+                }
+            }
+            
+            return sessionLines.concat(result).join('\r\n');
         }
 
         var offer = await self.pc.createOffer();
