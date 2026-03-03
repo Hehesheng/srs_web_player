@@ -1,142 +1,679 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>SRS</title>
+    <title>SRS Modern RTC Publisher - Screen Capture</title>
     <meta charset="utf-8">
-    <style>
-        body{
-            padding-top: 30px;
-        }
-    </style>
-    <link rel="stylesheet" type="text/css" href="css/bootstrap.min.css"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
     <script type="text/javascript" src="js/jquery-1.10.2.min.js"></script>
     <script type="text/javascript" src="js/adapter-7.4.0.min.js"></script>
     <script type="text/javascript" src="js/srs.sdk.js"></script>
     <script type="text/javascript" src="js/winlin.utility.js"></script>
     <script type="text/javascript" src="js/srs.page.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        /* 状态指示灯动画 */
+        .pulse-live {
+            animation: pulse-live 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse-live {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        /* 选择卡片悬浮效果 */
+        .source-card {
+            transition: all 0.3s ease;
+        }
+        .source-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(59, 130, 246, 0.15);
+        }
+        .source-card.active {
+            border-color: rgba(59, 130, 246, 0.6);
+            background: rgba(59, 130, 246, 0.1);
+        }
+    </style>
 </head>
-<body>
-<img src='//ossrs.net/gif/v1/sls.gif?site=ossrs.net&path=/player/rtcpublisher'/>
-<div class="navbar navbar-fixed-top">
-    <div class="navbar-inner">
-        <div class="container">
-            <a id="srs_index" class="brand" href="https://github.com/ossrs/srs">SRS</a>
-            <div class="nav-collapse collapse">
-                <ul class="nav">
-                    <li><a id="nav_srs_player" href="srs_player.html">SRS播放器</a></li>
-                    <li><a id="nav_rtc_player" href="rtc_player.html">RTC播放器</a></li>
-                    <li class="active"><a id="nav_rtc_publisher" href="rtc_publisher.html">RTC推流</a></li>
-                    <li><a id="nav_whip" href="whip.html">WHIP</a></li>
-                    <li><a id="nav_whep" href="whip.html">WHEP</a></li>
-                    <li><a  href="http://ossrs.net/srs.release/releases/app.html">iOS/Andriod</a></li>
-                    <!--<li><a id="nav_srs_publisher" href="srs_publisher.html">SRS编码器</a></li>-->
-                    <!--<li><a id="nav_srs_chat" href="srs_chat.html">SRS会议</a></li>-->
-                    <!--<li><a id="nav_srs_bwt" href="srs_bwt.html">SRS测网速</a></li>-->
-                    <!--<li><a id="nav_vlc" href="vlc.html">VLC播放器</a></li>-->
-                    <!--<li><a id="nav_gb28181" href="srs_gb28181.html">GB28181</a></li>-->
-                    <li>
-                        <a href="https://github.com/ossrs/srs">
-                            <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/ossrs/srs?style=social">
-                        </a>
-                    </li>
-                </ul>
+<body class="min-h-screen pb-12">
+    <!-- 顶部导航 -->
+    <nav class="sticky top-0 z-50 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md">
+        <div class="w-full mx-auto px-4 md:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-8">
+                    <a id="srs_index" href="https://github.com/ossrs/srs" class="text-2xl font-extrabold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">SRS</a>
+                    <div class="flex space-x-6 text-sm font-medium">
+                        <a id="nav_srs_player" href="srs_player.html" class="text-slate-400 hover:text-white transition">SRS播放器</a>
+                        <a id="nav_rtc_player" href="rtc_player.html" class="text-slate-400 hover:text-white transition">RTC播放器</a>
+                        <a id="nav_rtc_publisher" href="rtc_publisher.html" class="text-white border-b-2 border-blue-500 pb-1">RTC推流</a>
+                    </div>
+                </div>
+                <div class="hidden sm:flex items-center gap-4">
+                    <div id="publish_status" class="hidden items-center gap-2 bg-red-500/20 text-red-400 px-3 py-1.5 rounded-full border border-red-500/30">
+                        <span class="relative flex h-2 w-2">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                        </span>
+                        <span class="text-xs font-bold uppercase tracking-wider">LIVE</span>
+                    </div>
+                    <div class="text-[10px] text-slate-500 font-mono">
+                        VER: 2025.RTC.PUBLISHER
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
-</div>
-<div class="container">
-    <div class="form-inline">
-        URL:
-        <input type="text" id="txt_url" class="input-xxlarge" value="">
-        <button class="btn btn-primary" id="btn_publish">开始推流</button>
-    </div>
+    </nav>
 
-    <label></label>
-    <video id="rtc_media_player" width="320" autoplay muted></video>
+    <!-- 主容器 -->
+    <main class="w-full mx-auto px-4 md:px-8 py-6 space-y-6">
+        
+        <!-- 1. 视频预览区 -->
+        <section class="glass-card rounded-3xl overflow-hidden shadow-2xl relative group bg-black ring-1 ring-white/10">
+            <video id="rtc_media_player" autoplay muted playsinline webkit-playsinline
+                class="w-full max-h-[60vh] object-contain bg-slate-900/50"></video>
+            <!-- 无信号占位 -->
+            <div id="no_signal_placeholder" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80">
+                <svg class="w-20 h-20 text-slate-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <p class="text-slate-500 text-sm">选择捕获源并开始推流</p>
+            </div>
+            <!-- 推流状态信息 -->
+            <div id="stream_info_overlay" class="hidden absolute top-4 left-4 bg-black/60 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10">
+                <div class="flex items-center gap-3">
+                    <span id="resolution_info" class="text-xs text-blue-300 font-mono">--</span>
+                    <span class="text-slate-600">|</span>
+                    <span id="fps_info" class="text-xs text-emerald-300 font-mono">-- FPS</span>
+                </div>
+            </div>
+        </section>
 
-    <label></label>
-    SessionID: <span id='sessionid'></span>
+        <!-- 2. 捕获源选择区 -->
+        <section class="glass-card p-6 rounded-3xl shadow-lg border border-white/5">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-2 h-6 bg-violet-500 rounded-full"></div>
+                <h3 class="text-sm font-bold text-slate-200 uppercase tracking-widest">捕获源设置</h3>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- 视频源选择 -->
+                <div class="space-y-4">
+                    <label class="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">视频源</label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button id="btn_screen" class="source-card bg-slate-800/50 border border-slate-700 p-4 rounded-2xl text-left transition-all group">
+                            <div class="flex items-center gap-3 mb-2">
+                                <div class="w-10 h-10 bg-blue-500/20 rounded-xl flex items-center justify-center group-hover:bg-blue-500/30 transition">
+                                    <svg class="w-5 h-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                    </svg>
+                                </div>
+                                <span class="text-sm font-semibold text-slate-300">整个屏幕</span>
+                            </div>
+                            <p class="text-[10px] text-slate-500">捕获整个显示器画面</p>
+                        </button>
+                        <button id="btn_window" class="source-card bg-slate-800/50 border border-slate-700 p-4 rounded-2xl text-left transition-all group">
+                            <div class="flex items-center gap-3 mb-2">
+                                <div class="w-10 h-10 bg-emerald-500/20 rounded-xl flex items-center justify-center group-hover:bg-emerald-500/30 transition">
+                                    <svg class="w-5 h-5 text-emerald-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+                                    </svg>
+                                </div>
+                                <span class="text-sm font-semibold text-slate-300">应用窗口</span>
+                            </div>
+                            <p class="text-[10px] text-slate-500">选择特定窗口进行捕获</p>
+                        </button>
+                    </div>
+                    <div id="video_source_status" class="flex items-center gap-2 text-xs text-slate-500 bg-slate-800/30 px-3 py-2 rounded-xl">
+                        <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>未选择视频源</span>
+                    </div>
+                </div>
 
-    <label></label>
-    Audio: <span id='acodecs'></span><br/>
-    Video: <span id='vcodecs'></span>
+                <!-- 音频源选择 -->
+                <div class="space-y-4">
+                    <label class="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">音频源</label>
+                    <div class="space-y-3">
+                        <label class="source-card flex items-center gap-4 bg-slate-800/50 border border-slate-700 p-4 rounded-2xl cursor-pointer transition-all">
+                            <input type="checkbox" id="audio_system" name="audio_source" value="system" 
+                                class="w-5 h-5 rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500/30 focus:ring-offset-0 cursor-pointer">
+                            <div class="flex items-center gap-3 flex-grow">
+                                <div class="w-10 h-10 bg-violet-500/20 rounded-xl flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-violet-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span class="text-sm font-semibold text-slate-300">系统音频</span>
+                                    <p class="text-[10px] text-slate-500">捕获桌面/应用程序声音</p>
+                                </div>
+                            </div>
+                        </label>
+                        <label class="source-card flex items-center gap-4 bg-slate-800/50 border border-slate-700 p-4 rounded-2xl cursor-pointer transition-all">
+                            <input type="checkbox" id="audio_mic" name="audio_source" value="microphone"
+                                class="w-5 h-5 rounded bg-slate-700 border-slate-600 text-blue-500 focus:ring-blue-500/30 focus:ring-offset-0 cursor-pointer">
+                            <div class="flex items-center gap-3 flex-grow">
+                                <div class="w-10 h-10 bg-orange-500/20 rounded-xl flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-orange-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                    </svg>
+                                </div>
+                                <div class="flex-grow">
+                                    <span class="text-sm font-semibold text-slate-300">麦克风</span>
+                                    <p class="text-[10px] text-slate-500">使用麦克风录音</p>
+                                </div>
+                            </div>
+                        </label>
+                        <!-- 麦克风设备选择 -->
+                        <div id="mic_device_selector" class="hidden pl-4 border-l-2 border-slate-700 ml-2">
+                            <select id="mic_device_list" class="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
+                                <option value="">加载麦克风设备中...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-    <label></label>
-    Simulator: <a href='#' id='simulator-drop'>Drop</a>
+        <!-- 3. 推流控制区 -->
+        <section class="glass-card p-8 rounded-3xl shadow-lg border border-white/5">
+            <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                <!-- URL 输入 -->
+                <div class="xl:col-span-9 space-y-3">
+                    <label class="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">推流地址</label>
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <input type="text" id="txt_url" placeholder="webrtc://server/app/stream" 
+                            class="flex-grow bg-slate-800/40 border border-slate-700/50 rounded-xl px-5 py-3 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none transition-all placeholder:text-slate-600">
+                    </div>
+                </div>
+                <!-- 操作按钮 -->
+                <div class="xl:col-span-3 flex items-end gap-3">
+                    <button id="btn_publish" class="flex-grow bg-gradient-to-br from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold py-3 rounded-xl shadow-xl shadow-emerald-900/30 transition-all active:scale-[0.97] flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                        开始推流
+                    </button>
+                    <button id="btn_stop" class="hidden flex-grow bg-gradient-to-br from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-bold py-3 rounded-xl shadow-xl shadow-red-900/30 transition-all active:scale-[0.97] flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                        </svg>
+                        停止推流
+                    </button>
+                </div>
+            </div>
 
-    <footer>
-        <p></p>
-        <p><a href="https://github.com/ossrs/srs">SRS Team &copy; 2020</a></p>
+            <!-- 编码信息 -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8 pt-8 border-t border-slate-800/40">
+                <div class="space-y-2">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Session ID</label>
+                    <div id="sessionid" class="text-sm text-blue-300 font-mono bg-slate-800/40 px-4 py-2 rounded-xl truncate">--</div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Audio Codec</label>
+                    <div id="acodecs" class="text-sm text-emerald-300 font-mono bg-slate-800/40 px-4 py-2 rounded-xl truncate">--</div>
+                </div>
+                <div class="space-y-2">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Video Codec</label>
+                    <div id="vcodecs" class="text-sm text-violet-300 font-mono bg-slate-800/40 px-4 py-2 rounded-xl truncate">--</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4. 调试工具区 -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- 高级设置 -->
+            <div class="glass-card p-8 rounded-3xl shadow-lg border border-white/5">
+                <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">高级设置</h3>
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
+                        <div>
+                            <span class="text-sm font-medium text-slate-300">视频帧率</span>
+                            <p class="text-[10px] text-slate-500 mt-1">设置捕获帧率 (推荐 30)</p>
+                        </div>
+                        <select id="capture_fps" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
+                            <option value="15">15 FPS</option>
+                            <option value="24">24 FPS</option>
+                            <option value="30" selected>30 FPS</option>
+                            <option value="60">60 FPS</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
+                        <div>
+                            <span class="text-sm font-medium text-slate-300">分辨率限制</span>
+                            <p class="text-[10px] text-slate-500 mt-1">最大捕获分辨率</p>
+                        </div>
+                        <select id="capture_resolution" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
+                            <option value="720">720p (1280x720)</option>
+                            <option value="1080" selected>1080p (1920x1080)</option>
+                            <option value="1440">2K (2560x1440)</option>
+                            <option value="2160">4K (3840x2160)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 网络调试 -->
+            <div class="glass-card p-8 rounded-3xl shadow-lg border border-white/5 flex flex-col justify-between group">
+                <div>
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">网络调试</h3>
+                    <p class="text-xs text-slate-500 leading-relaxed">模拟网络丢包，测试 WebRTC 推流的抗丢包和恢复能力。</p>
+                </div>
+                <a href="#" id="simulator-drop" class="mt-8 block w-full text-center py-4 bg-red-950/20 text-red-400 hover:bg-red-500 hover:text-white border border-red-500/30 rounded-2xl text-xs font-black transition-all transform group-hover:shadow-[0_0_20px_rgba(239,68,68,0.2)]">
+                    DROP NETWORK PACKET
+                </a>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="text-center py-12 text-slate-600 text-[10px] uppercase tracking-[0.3em]">
+        <div class="flex justify-center gap-8 mb-4">
+            <a href="#" class="hover:text-blue-400 transition">Documentation</a>
+            <a href="https://github.com/ossrs/srs" class="hover:text-blue-400 transition">GitHub</a>
+            <a href="#" class="hover:text-blue-400 transition">Support</a>
+        </div>
+        <p>SRS Team &copy; 2020-2025 | Professional Real-Time Media Infrastructure</p>
     </footer>
-</div>
-<script type="text/javascript">
-$(function(){
-    var sdk = null; // Global handler to do cleanup when republishing.
-    var startPublish = function() {
-        $('#rtc_media_player').show();
 
-        // Close PC when user replay.
-        if (sdk) {
-            sdk.close();
+    <img src='//ossrs.net/gif/v1/sls.gif?site=ossrs.net&path=/player/rtcpublisher' class="hidden" />
+
+    <script type="text/javascript">
+    $(function(){
+        var sdk = null; // Global handler to do cleanup when republishing.
+        var displayStream = null; // 桌面捕获流
+        var audioStream = null; // 麦克风音频流
+        var combinedStream = null; // 合并后的流
+        var isPublishing = false;
+
+        // 获取分辨率约束
+        function getResolutionConstraints() {
+            var resolution = $('#capture_resolution').val();
+            var constraints = {
+                '720': { width: { max: 1280 }, height: { max: 720 } },
+                '1080': { width: { max: 1920 }, height: { max: 1080 } },
+                '1440': { width: { max: 2560 }, height: { max: 1440 } },
+                '2160': { width: { max: 3840 }, height: { max: 2160 } }
+            };
+            return constraints[resolution] || constraints['1080'];
         }
-        sdk = new SrsRtcPublisherAsync();
 
-        // User should set the stream when publish is done, @see https://webrtc.org/getting-started/media-devices
-        // However SRS SDK provides a consist API like https://webrtc.org/getting-started/remote-streams
-        $('#rtc_media_player').prop('srcObject', sdk.stream);
-        // Optional callback, SDK will add track to stream.
-        // sdk.ontrack = function (event) { console.log('Got track', event); sdk.stream.addTrack(event.track); };
-
-        // https://developer.mozilla.org/en-US/docs/Web/Media/Formats/WebRTC_codecs#getting_the_supported_codecs
-        sdk.pc.onicegatheringstatechange = function (event) {
-            if (sdk.pc.iceGatheringState === "complete") {
-                $('#acodecs').html(SrsRtcFormatSenders(sdk.pc.getSenders(), "audio"));
-                $('#vcodecs').html(SrsRtcFormatSenders(sdk.pc.getSenders(), "video"));
+        // 更新视频源状态显示
+        function updateVideoSourceStatus(text, isActive) {
+            var $status = $('#video_source_status');
+            $status.find('span').text(text);
+            if (isActive) {
+                $status.removeClass('text-slate-500').addClass('text-emerald-400');
+                $status.find('svg').removeClass('text-slate-500').addClass('text-emerald-400');
+            } else {
+                $status.removeClass('text-emerald-400').addClass('text-slate-500');
+                $status.find('svg').removeClass('text-emerald-400').addClass('text-slate-500');
             }
-        };
+        }
 
-        // For example: webrtc://r.ossrs.net/live/livestream
-        var url = $("#txt_url").val();
-        sdk.publish(url).then(function(session){
-            $('#sessionid').html(session.sessionid);
-            $('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
-        }).catch(function (reason) {
-            // Throw by sdk.
-            if (reason instanceof SrsError) {
-                if (reason.name === 'HttpsRequiredError') {
-                    alert(`WebRTC推流必须是HTTPS或者localhost：${reason.name} ${reason.message}`);
+        // 选择屏幕捕获
+        async function selectScreenCapture() {
+            try {
+                // 停止之前的流
+                if (displayStream) {
+                    displayStream.getTracks().forEach(track => track.stop());
+                }
+
+                var fps = parseInt($('#capture_fps').val()) || 30;
+                var resConstraints = getResolutionConstraints();
+
+                displayStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: {
+                        cursor: 'always',
+                        frameRate: { ideal: fps, max: fps },
+                        ...resConstraints
+                    },
+                    audio: $('#audio_system').is(':checked') // 系统音频
+                });
+
+                // 监听流结束事件
+                displayStream.getVideoTracks()[0].onended = function() {
+                    console.log('Screen sharing stopped');
+                    stopCapture();
+                };
+
+                // 显示预览
+                updatePreview();
+                updateVideoSourceStatus('屏幕捕获已启用', true);
+                
+                // 更新按钮状态
+                $('#btn_screen').addClass('active');
+                $('#btn_window').removeClass('active');
+
+                return displayStream;
+            } catch (err) {
+                console.error('Screen capture error:', err);
+                updateVideoSourceStatus('捕获失败: ' + err.message, false);
+                return null;
+            }
+        }
+
+        // 选择窗口捕获 (实际上 getDisplayMedia 会显示选择器，用户可以选择窗口)
+        async function selectWindowCapture() {
+            // getDisplayMedia 的选择器允许用户选择屏幕、窗口或标签页
+            // 这里我们只是提供不同的 UI 入口，实际调用相同的 API
+            return selectScreenCapture();
+        }
+
+        // 获取麦克风音频流
+        async function getMicrophoneStream() {
+            try {
+                var deviceId = $('#mic_device_list').val();
+                var constraints = {
+                    audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+                    video: false
+                };
+                audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+                return audioStream;
+            } catch (err) {
+                console.error('Microphone error:', err);
+                alert('无法访问麦克风: ' + err.message);
+                return null;
+            }
+        }
+
+        // 更新预览
+        function updatePreview() {
+            var $video = $('#rtc_media_player');
+            var $placeholder = $('#no_signal_placeholder');
+            
+            if (displayStream) {
+                $video.prop('srcObject', displayStream);
+                $placeholder.addClass('hidden');
+                
+                // 显示分辨率信息
+                var videoTrack = displayStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    var settings = videoTrack.getSettings();
+                    $('#resolution_info').text(settings.width + 'x' + settings.height);
+                    $('#fps_info').text((settings.frameRate || '--') + ' FPS');
+                    $('#stream_info_overlay').removeClass('hidden');
+                }
+            } else {
+                $video.prop('srcObject', null);
+                $placeholder.removeClass('hidden');
+                $('#stream_info_overlay').addClass('hidden');
+            }
+        }
+
+        // 停止捕获
+        function stopCapture() {
+            if (displayStream) {
+                displayStream.getTracks().forEach(track => track.stop());
+                displayStream = null;
+            }
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+            }
+            if (combinedStream) {
+                combinedStream = null;
+            }
+            updatePreview();
+            updateVideoSourceStatus('未选择视频源', false);
+            $('#btn_screen, #btn_window').removeClass('active');
+        }
+
+        // 开始推流
+        async function startPublish() {
+            if (isPublishing) return;
+
+            // 检查是否有视频源
+            if (!displayStream) {
+                alert('请先选择视频源（屏幕或窗口）');
+                return;
+            }
+
+            // Close PC when user republish.
+            if (sdk) {
+                sdk.close();
+            }
+            
+            // 创建新的 SDK 实例（不使用默认的 getUserMedia）
+            sdk = new SrsRtcPublisherAsync();
+
+            // 构建合并流
+            combinedStream = new MediaStream();
+            
+            // 添加视频轨道
+            displayStream.getVideoTracks().forEach(track => {
+                combinedStream.addTrack(track);
+            });
+
+            // 添加音频轨道
+            var hasAudio = false;
+            
+            // 系统音频 (来自 displayStream)
+            if ($('#audio_system').is(':checked') && displayStream.getAudioTracks().length > 0) {
+                displayStream.getAudioTracks().forEach(track => {
+                    combinedStream.addTrack(track);
+                    hasAudio = true;
+                });
+            }
+
+            // 麦克风音频
+            if ($('#audio_mic').is(':checked')) {
+                var micStream = await getMicrophoneStream();
+                if (micStream) {
+                    micStream.getAudioTracks().forEach(track => {
+                        combinedStream.addTrack(track);
+                        hasAudio = true;
+                    });
+                }
+            }
+
+            // 如果没有任何音频，添加一个静音轨道（某些服务器需要）
+            if (!hasAudio) {
+                console.log('No audio track, publishing video only');
+            }
+
+            // 设置预览
+            $('#rtc_media_player').prop('srcObject', combinedStream);
+
+            // 手动添加 transceivers
+            sdk.pc.addTransceiver("audio", {direction: "sendonly"});
+            sdk.pc.addTransceiver("video", {direction: "sendonly"});
+
+            // 添加轨道到 peer connection
+            combinedStream.getTracks().forEach(function(track) {
+                sdk.pc.addTrack(track);
+                sdk.ontrack && sdk.ontrack({track: track});
+            });
+
+            try {
+                var url = $("#txt_url").val();
+                
+                // 准备 URL 参数
+                var conf = sdk.__internal.prepareUrl(url);
+                
+                // 创建 offer
+                var offer = await sdk.pc.createOffer();
+                await sdk.pc.setLocalDescription(offer);
+
+                // 发送到服务器
+                var session = await new Promise(function(resolve, reject) {
+                    var data = {
+                        api: conf.apiUrl, tid: conf.tid, streamurl: conf.streamUrl,
+                        clientip: null, sdp: offer.sdp
+                    };
+                    console.log("Generated offer: ", data);
+
+                    const xhr = new XMLHttpRequest();
+                    xhr.onload = function() {
+                        if (xhr.readyState !== xhr.DONE) return;
+                        if (xhr.status !== 200 && xhr.status !== 201) return reject(xhr);
+                        const data = JSON.parse(xhr.responseText);
+                        console.log("Got answer: ", data);
+                        return data.code ? reject(xhr) : resolve(data);
+                    }
+                    xhr.open('POST', conf.apiUrl, true);
+                    xhr.setRequestHeader('Content-type', 'application/json');
+                    xhr.send(JSON.stringify(data));
+                });
+
+                await sdk.pc.setRemoteDescription(
+                    new RTCSessionDescription({type: 'answer', sdp: session.sdp})
+                );
+                session.simulator = conf.schema + '//' + conf.urlObject.server + ':' + conf.port + '/rtc/v1/nack/';
+
+                // 更新 UI
+                $('#sessionid').text(session.sessionid);
+                $('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
+
+                // 获取编码信息
+                sdk.pc.onicegatheringstatechange = function(event) {
+                    if (sdk.pc.iceGatheringState === "complete") {
+                        $('#acodecs').text(SrsRtcFormatSenders(sdk.pc.getSenders(), "audio") || 'N/A');
+                        $('#vcodecs').text(SrsRtcFormatSenders(sdk.pc.getSenders(), "video") || 'N/A');
+                    }
+                };
+
+                isPublishing = true;
+                updatePublishUI(true);
+
+            } catch (reason) {
+                console.error('Publish error:', reason);
+                
+                if (reason instanceof SrsError) {
+                    if (reason.name === 'HttpsRequiredError') {
+                        alert(`WebRTC推流必须是HTTPS或者localhost：${reason.name} ${reason.message}`);
+                    } else {
+                        alert(`${reason.name} ${reason.message}`);
+                    }
+                } else if (reason instanceof DOMException) {
+                    alert(`媒体设备错误：${reason.name} ${reason.message}`);
                 } else {
-                    alert(`${reason.name} ${reason.message}`);
+                    alert('推流失败，请检查服务器地址和网络连接');
                 }
+
+                sdk.close();
+                sdk = null;
             }
-            // See https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia#exceptions
-            if (reason instanceof DOMException) {
-                if (reason.name === 'NotFoundError') {
-                    alert(`找不到麦克风和摄像头设备：getUserMedia ${reason.name} ${reason.message}`);
-                } else if (reason.name === 'NotAllowedError') {
-                    alert(`你禁止了网页访问摄像头和麦克风：getUserMedia ${reason.name} ${reason.message}`);
-                } else if (['AbortError', 'NotAllowedError', 'NotFoundError', 'NotReadableError', 'OverconstrainedError', 'SecurityError', 'TypeError'].includes(reason.name)) {
-                    alert(`getUserMedia ${reason.name} ${reason.message}`);
-                }
+        }
+
+        // 停止推流
+        function stopPublish() {
+            if (sdk) {
+                sdk.close();
+                sdk = null;
+            }
+            isPublishing = false;
+            updatePublishUI(false);
+            
+            // 恢复预览（显示原始捕获流）
+            if (displayStream) {
+                $('#rtc_media_player').prop('srcObject', displayStream);
             }
 
-            sdk.close();
-            $('#rtc_media_player').hide();
-            console.error(reason);
+            // 重置状态显示
+            $('#sessionid').text('--');
+            $('#acodecs').text('--');
+            $('#vcodecs').text('--');
+        }
+
+        // 更新推流 UI 状态
+        function updatePublishUI(isLive) {
+            if (isLive) {
+                $('#btn_publish').addClass('hidden');
+                $('#btn_stop').removeClass('hidden').addClass('flex');
+                $('#publish_status').removeClass('hidden').addClass('flex');
+            } else {
+                $('#btn_publish').removeClass('hidden');
+                $('#btn_stop').addClass('hidden').removeClass('flex');
+                $('#publish_status').addClass('hidden').removeClass('flex');
+            }
+        }
+
+        // 加载麦克风设备列表
+        async function loadMicrophoneDevices() {
+            try {
+                // 先请求权限
+                await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                
+                var devices = await navigator.mediaDevices.enumerateDevices();
+                var audioDevices = devices.filter(d => d.kind === 'audioinput');
+                
+                var $select = $('#mic_device_list');
+                $select.empty();
+                
+                if (audioDevices.length === 0) {
+                    $select.append('<option value="">未检测到麦克风</option>');
+                } else {
+                    audioDevices.forEach(function(device, index) {
+                        var label = device.label || ('麦克风 ' + (index + 1));
+                        $select.append('<option value="' + device.deviceId + '">' + label + '</option>');
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to enumerate devices:', err);
+                $('#mic_device_list').html('<option value="">无法访问麦克风</option>');
+            }
+        }
+
+        // 事件绑定
+        $('#btn_screen').click(function() {
+            selectScreenCapture();
         });
-    };
 
-    $('#rtc_media_player').hide();
-    var query = parse_query_string();
-    srs_init_rtc("#txt_url", query);
+        $('#btn_window').click(function() {
+            selectWindowCapture();
+        });
 
-    $("#btn_publish").click(startPublish);
-    // Never play util windows loaded @see https://github.com/ossrs/srs/issues/2732
-    if (query.autostart === 'true') {
-        window.addEventListener("load", function(){ startPublish(); });
-    }
-});
-</script>
+        $('#btn_publish').click(function() {
+            startPublish();
+        });
+
+        $('#btn_stop').click(function() {
+            stopPublish();
+        });
+
+        // 麦克风复选框变化
+        $('#audio_mic').change(function() {
+            if ($(this).is(':checked')) {
+                $('#mic_device_selector').removeClass('hidden');
+                loadMicrophoneDevices();
+            } else {
+                $('#mic_device_selector').addClass('hidden');
+            }
+        });
+
+        // 系统音频需要重新获取流
+        $('#audio_system').change(function() {
+            if (displayStream && !isPublishing) {
+                // 需要重新获取流以包含/排除系统音频
+                selectScreenCapture();
+            }
+        });
+
+        // 初始化
+        var query = parse_query_string();
+        srs_init_rtc("#txt_url", query);
+
+        // 检查 HTTPS 要求
+        if (!navigator.mediaDevices && window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
+            alert('屏幕捕获需要 HTTPS 或 localhost 环境');
+        }
+
+        // 自动开始 (如果 URL 参数指定)
+        if (query.autostart === 'true') {
+            window.addEventListener("load", async function() {
+                await selectScreenCapture();
+                if (displayStream) {
+                    startPublish();
+                }
+            });
+        }
+    });
+    </script>
 </body>
 </html>
-
