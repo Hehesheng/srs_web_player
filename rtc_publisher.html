@@ -225,48 +225,33 @@
             </div>
         </section>
 
-        <!-- 4. 调试工具区 -->
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- 高级设置 -->
-            <div class="glass-card p-8 rounded-3xl shadow-lg border border-white/5">
-                <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">高级设置</h3>
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
-                        <div>
-                            <span class="text-sm font-medium text-slate-300">视频帧率</span>
-                            <p class="text-[10px] text-slate-500 mt-1">设置捕获帧率 (推荐 30)</p>
-                        </div>
-                        <select id="capture_fps" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
-                            <option value="15">15 FPS</option>
-                            <option value="24">24 FPS</option>
-                            <option value="30" selected>30 FPS</option>
-                            <option value="60">60 FPS</option>
-                        </select>
+        <section class="glass-card p-8 rounded-3xl shadow-lg border border-white/5">
+            <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6">高级设置</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
+                    <div>
+                        <span class="text-sm font-medium text-slate-300">视频帧率</span>
+                        <p class="text-[10px] text-slate-500 mt-1">设置捕获帧率 (推荐 30)</p>
                     </div>
-                    <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
-                        <div>
-                            <span class="text-sm font-medium text-slate-300">分辨率限制</span>
-                            <p class="text-[10px] text-slate-500 mt-1">最大捕获分辨率</p>
-                        </div>
-                        <select id="capture_resolution" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
-                            <option value="720">720p (1280x720)</option>
-                            <option value="1080" selected>1080p (1920x1080)</option>
-                            <option value="1440">2K (2560x1440)</option>
-                            <option value="2160">4K (3840x2160)</option>
-                        </select>
+                    <select id="capture_fps" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
+                        <option value="15">15 FPS</option>
+                        <option value="24">24 FPS</option>
+                        <option value="30" selected>30 FPS</option>
+                        <option value="60">60 FPS</option>
+                    </select>
+                </div>
+                <div class="flex items-center justify-between p-4 bg-slate-800/30 rounded-xl">
+                    <div>
+                        <span class="text-sm font-medium text-slate-300">分辨率限制</span>
+                        <p class="text-[10px] text-slate-500 mt-1">最大捕获分辨率</p>
                     </div>
+                    <select id="capture_resolution" class="bg-slate-700/50 border border-slate-600/50 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500/50 cursor-pointer">
+                        <option value="720">720p (1280x720)</option>
+                        <option value="1080" selected>1080p (1920x1080)</option>
+                        <option value="1440">2K (2560x1440)</option>
+                        <option value="2160">4K (3840x2160)</option>
+                    </select>
                 </div>
-            </div>
-
-            <!-- 网络调试 -->
-            <div class="glass-card p-8 rounded-3xl shadow-lg border border-white/5 flex flex-col justify-between group">
-                <div>
-                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">网络调试</h3>
-                    <p class="text-xs text-slate-500 leading-relaxed">模拟网络丢包，测试 WebRTC 推流的抗丢包和恢复能力。</p>
-                </div>
-                <a href="#" id="simulator-drop" class="mt-8 block w-full text-center py-4 bg-red-950/20 text-red-400 hover:bg-red-500 hover:text-white border border-red-500/30 rounded-2xl text-xs font-black transition-all transform group-hover:shadow-[0_0_20px_rgba(239,68,68,0.2)]">
-                    DROP NETWORK PACKET
-                </a>
             </div>
         </section>
 
@@ -480,15 +465,49 @@
             // 设置预览
             $('#rtc_media_player').prop('srcObject', combinedStream);
 
-            // 手动添加 transceivers
-            sdk.pc.addTransceiver("audio", {direction: "sendonly"});
-            sdk.pc.addTransceiver("video", {direction: "sendonly"});
-
-            // 添加轨道到 peer connection
+            // 添加轨道到 peer connection (addTrack 会自动创建 transceiver)
             combinedStream.getTracks().forEach(function(track) {
-                sdk.pc.addTrack(track);
+                sdk.pc.addTrack(track, combinedStream);
                 sdk.ontrack && sdk.ontrack({track: track});
             });
+
+            // 设置视频编码参数: 5Mbps CBR 码率，禁用 B 帧 (baseline profile)
+            var senders = sdk.pc.getSenders();
+            var targetBitrate = 5000000; // 5 Mbps
+            for (var i = 0; i < senders.length; i++) {
+                var sender = senders[i];
+                if (sender.track && sender.track.kind === 'video') {
+                    var params = sender.getParameters();
+                    if (!params.encodings || params.encodings.length === 0) {
+                        params.encodings = [{}];
+                    }
+                    // CBR 模式: maxBitrate = minBitrate 实现恒定码率
+                    params.encodings[0].maxBitrate = targetBitrate;
+                    params.encodings[0].scaleResolutionDownBy = 1.0;
+                    await sender.setParameters(params);
+                }
+            }
+            
+            // 使用 SDP munging 进一步强制 CBR (x-google-max-bitrate/min-bitrate)
+            var enforceCBR = function(sdp) {
+                var lines = sdp.split('\r\n');
+                var result = [];
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i];
+                    result.push(line);
+                    // 在 video m= 行后的 a=fmtp 行添加码率限制
+                    if (line.indexOf('a=fmtp:') === 0 && line.indexOf('apt=') === -1) {
+                        // 检查是否已有 x-google 参数
+                        if (line.indexOf('x-google') === -1) {
+                            var bitrateKbps = Math.floor(targetBitrate / 1000);
+                            result[result.length - 1] = line + ';x-google-max-bitrate=' + bitrateKbps + 
+                                ';x-google-min-bitrate=' + bitrateKbps + 
+                                ';x-google-start-bitrate=' + bitrateKbps;
+                        }
+                    }
+                }
+                return result.join('\r\n');
+            };
 
             try {
                 var url = $("#txt_url").val();
@@ -498,6 +517,15 @@
                 
                 // 创建 offer
                 var offer = await sdk.pc.createOffer();
+                
+                // 修改 SDP: 强制使用 H.264 Baseline Profile (无 B 帧) + CBR
+                var modifiedSdp = offer.sdp;
+                // 将 profile-level-id 修改为 42e01f (Constrained Baseline)
+                modifiedSdp = modifiedSdp.replace(/profile-level-id=([0-9a-fA-F]+)/g, 'profile-level-id=42e01f');
+                // 应用 CBR 码率限制
+                modifiedSdp = enforceCBR(modifiedSdp);
+                offer.sdp = modifiedSdp;
+                
                 await sdk.pc.setLocalDescription(offer);
 
                 // 发送到服务器
@@ -524,17 +552,20 @@
                 await sdk.pc.setRemoteDescription(
                     new RTCSessionDescription({type: 'answer', sdp: session.sdp})
                 );
-                session.simulator = conf.schema + '//' + conf.urlObject.server + ':' + conf.port + '/rtc/v1/nack/';
 
                 // 更新 UI
                 $('#sessionid').text(session.sessionid);
-                $('#simulator-drop').attr('href', session.simulator + '?drop=1&username=' + session.sessionid);
 
                 // 获取编码信息
                 sdk.pc.onicegatheringstatechange = function(event) {
-                    if (sdk.pc.iceGatheringState === "complete") {
-                        $('#acodecs').text(SrsRtcFormatSenders(sdk.pc.getSenders(), "audio") || 'N/A');
-                        $('#vcodecs').text(SrsRtcFormatSenders(sdk.pc.getSenders(), "video") || 'N/A');
+                    if (sdk.pc && sdk.pc.iceGatheringState === "complete") {
+                        try {
+                            var senders = sdk.pc.getSenders().filter(function(s) { return s.track !== null; });
+                            $('#acodecs').text(SrsRtcFormatSenders(senders, "audio") || 'N/A');
+                            $('#vcodecs').text(SrsRtcFormatSenders(senders, "video") || 'N/A');
+                        } catch (e) {
+                            console.warn('Failed to get codec info:', e);
+                        }
                     }
                 };
 

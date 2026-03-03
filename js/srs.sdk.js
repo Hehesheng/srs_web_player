@@ -313,6 +313,81 @@ function SrsRtcPlayerAsync() {
             return sdp;
         }
 
+        // Fix answer SDP m-line order to match offer (audio first, then video)
+        function fixAnswerMLineOrder(offerSdp, answerSdp) {
+            var offerMLines = [];
+            var offerLines = offerSdp.split('\r\n');
+            for (var i = 0; i < offerLines.length; i++) {
+                if (offerLines[i].indexOf('m=') === 0) {
+                    var type = offerLines[i].split(' ')[0].substring(2);
+                    offerMLines.push(type);
+                }
+            }
+            
+            var answerSections = {};
+            var answerLines = answerSdp.split('\r\n');
+            var currentSection = 'session';
+            var sessionLines = [];
+            var currentMLines = [];
+            var currentType = null;
+            
+            for (var i = 0; i < answerLines.length; i++) {
+                var line = answerLines[i];
+                if (line.indexOf('m=') === 0) {
+                    if (currentType) {
+                        answerSections[currentType] = currentMLines;
+                    } else {
+                        sessionLines = currentMLines;
+                    }
+                    currentType = line.split(' ')[0].substring(2);
+                    currentMLines = [line];
+                } else {
+                    currentMLines.push(line);
+                }
+            }
+            if (currentType) {
+                answerSections[currentType] = currentMLines;
+            } else {
+                sessionLines = currentMLines;
+            }
+            
+            // Update BUNDLE to include all m-lines
+            var bundleMids = [];
+            for (var i = 0; i < offerMLines.length; i++) {
+                bundleMids.push(String(i));
+            }
+            for (var i = 0; i < sessionLines.length; i++) {
+                if (sessionLines[i].indexOf('a=group:BUNDLE') === 0) {
+                    sessionLines[i] = 'a=group:BUNDLE ' + bundleMids.join(' ');
+                }
+            }
+            
+            var result = sessionLines.slice();
+            for (var i = 0; i < offerMLines.length; i++) {
+                var type = offerMLines[i];
+                if (answerSections[type]) {
+                    // Fix mid to match offer order
+                    var section = answerSections[type].slice();
+                    for (var j = 0; j < section.length; j++) {
+                        if (section[j].indexOf('a=mid:') === 0) {
+                            section[j] = 'a=mid:' + i;
+                        }
+                    }
+                    result = result.concat(section);
+                } else {
+                    // Add rejected m-line (port 0) for missing media
+                    result.push('m=' + type + ' 0 UDP/TLS/RTP/SAVPF 0');
+                    result.push('c=IN IP4 0.0.0.0');
+                    result.push('a=mid:' + i);
+                    if (type === 'audio') {
+                        result.push('a=rtpmap:0 PCMU/8000');
+                    }
+                }
+            }
+            
+            return result.join('\r\n');
+        }
+
         var offer = await self.pc.createOffer();
         offer.sdp = addHEVCCodecToSDP(offer.sdp);
         await self.pc.setLocalDescription(offer);
@@ -336,8 +411,12 @@ function SrsRtcPlayerAsync() {
             xhr.setRequestHeader('Content-type', 'application/json');
             xhr.send(JSON.stringify(data));
         });
+        
+        // Fix m-line order mismatch between offer and answer
+        var fixedAnswerSdp = fixAnswerMLineOrder(offer.sdp, session.sdp);
+        
         await self.pc.setRemoteDescription(
-            new RTCSessionDescription({type: 'answer', sdp: session.sdp})
+            new RTCSessionDescription({type: 'answer', sdp: fixedAnswerSdp})
         );
         session.simulator = conf.schema + '//' + conf.urlObject.server + ':' + conf.port + '/rtc/v1/nack/';
 
