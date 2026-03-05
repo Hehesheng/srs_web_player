@@ -186,7 +186,7 @@
                 <div class="xl:col-span-9 space-y-3">
                     <label class="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">推流地址</label>
                     <div class="flex flex-col sm:flex-row gap-3">
-                        <input type="text" id="txt_url" placeholder="webrtc://server/app/stream" 
+                        <input type="text" id="txt_url" placeholder="http://server:port/rtc/v1/whip/?app=live&stream=xxx" 
                             class="flex-grow bg-slate-800/40 border border-slate-700/50 rounded-xl px-5 py-3 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none transition-all placeholder:text-slate-600">
                     </div>
                 </div>
@@ -327,6 +327,21 @@
                     stopCapture();
                 };
 
+                // 打印实际捕获参数
+                var videoTrack = displayStream.getVideoTracks()[0];
+                var settings = videoTrack.getSettings();
+                var capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+                console.log('Capture settings:', settings);
+                console.log('Capture capabilities:', capabilities);
+                console.log('Requested FPS:', fps, 'Actual FPS:', settings.frameRate);
+                
+                // 设置 contentHint 为 'detail' (屏幕内容优化，优先清晰度)
+                // 这会影响编码器行为，使其更适合屏幕共享
+                if ('contentHint' in videoTrack) {
+                    videoTrack.contentHint = 'detail';
+                    console.log('Set video contentHint to detail for screen capture');
+                }
+
                 // 显示预览
                 updatePreview();
                 updateVideoSourceStatus('屏幕捕获已启用', true);
@@ -465,39 +480,126 @@
             // 设置预览
             $('#rtc_media_player').prop('srcObject', combinedStream);
 
-            // 添加轨道到 peer connection (addTrack 会自动创建 transceiver)
-            combinedStream.getTracks().forEach(function(track) {
-                sdk.pc.addTrack(track, combinedStream);
-                sdk.ontrack && sdk.ontrack({track: track});
-            });
-
             var targetBitrate = 5000000; // 5 Mbps
+            var targetFps = parseInt($('#capture_fps').val()) || 30;
             
-            // SDP munging: 添加码率限制到 H264 编解码器
+            // 添加轨道并设置编解码器 (必须在 createOffer 之前)
+            // 注意: SRS 服务器只支持 H.264
+            combinedStream.getTracks().forEach(function(track) {
+                var transceiver = sdk.pc.addTransceiver(track, {
+                    direction: 'sendonly',
+                    streams: [combinedStream],
+                    sendEncodings: track.kind === 'video' ? [{
+                        maxBitrate: targetBitrate,
+                        maxFramerate: targetFps,
+                        scaleResolutionDownBy: 1.0,
+                    }] : undefined
+                });
+                sdk.ontrack && sdk.ontrack({track: track});
+                
+                // 设置视频编解码器: 只保留 H.264
+                // 关键: NVENC 硬件编码器优先支持 High Profile (6400) 和 Constrained High (640c)
+                // OpenH264 软件编码器只支持 Baseline/Constrained Baseline
+                // 所以我们优先 High Profile 来触发硬件编码
+                if (track.kind === 'video' && transceiver.setCodecPreferences) {
+                    try {
+                        var codecs = RTCRtpSender.getCapabilities('video').codecs;
+                        console.log('Available video codecs:', codecs.map(function(c) {
+                            return c.mimeType + (c.sdpFmtpLine ? ' (' + c.sdpFmtpLine + ')' : '');
+                        }));
+                        
+                        // 只保留 H.264 编解码器
+                        var h264Codecs = codecs.filter(function(c) {
+                            return c.mimeType.toLowerCase() === 'video/h264';
+                        });
+                        
+                        // 按 profile 排序，同时优先 packetization-mode=1
+                        // NVENC 硬件编码器支持: High, Main, Baseline
+                        // OpenH264 软件编码器只支持: Constrained Baseline
+                        h264Codecs.sort(function(a, b) {
+                            var getProfilePriority = function(codec) {
+                                var fmtp = codec.sdpFmtpLine || '';
+                                var hasPacketMode1 = fmtp.indexOf('packetization-mode=1') >= 0;
+                                var base = hasPacketMode1 ? 0 : 100; // 优先 packetization-mode=1
+                                
+                                // High Profile (6400) - NVENC 优先
+                                if (fmtp.indexOf('6400') >= 0) return base + 1;
+                                // Constrained High (640c) - NVENC 支持
+                                if (fmtp.indexOf('640c') >= 0) return base + 2;
+                                // Main Profile (4d00) - NVENC 支持
+                                if (fmtp.indexOf('4d00') >= 0) return base + 3;
+                                // Constrained Baseline (42e0) - 可能触发 OpenH264
+                                if (fmtp.indexOf('42e0') >= 0) return base + 4;
+                                // Baseline (4200) - 可能触发 OpenH264
+                                if (fmtp.indexOf('4200') >= 0) return base + 5;
+                                return base + 99;
+                            };
+                            return getProfilePriority(a) - getProfilePriority(b);
+                        });
+                        
+                        // 添加 RTX 编解码器 (用于重传)
+                        var rtxCodecs = codecs.filter(function(c) {
+                            return c.mimeType.toLowerCase() === 'video/rtx';
+                        });
+                        
+                        var preferredCodecs = h264Codecs.concat(rtxCodecs);
+                        
+                        if (preferredCodecs.length > 0) {
+                            transceiver.setCodecPreferences(preferredCodecs);
+                            console.log('H.264 codec preferences set for NVENC, preferred profile:', 
+                                h264Codecs[0] ? h264Codecs[0].sdpFmtpLine : 'none');
+                        }
+                    } catch (e) {
+                        console.warn('setCodecPreferences failed:', e);
+                    }
+                }
+            });
+            
+            // SDP munging: 添加码率限制 (b=AS 和 x-google-* 参数实现 CBR)
             var enforceBitrate = function(sdp) {
                 var lines = sdp.split('\r\n');
                 var result = [];
                 var inVideoSection = false;
                 var bitrateKbps = Math.floor(targetBitrate / 1000);
+                var addedBandwidth = false;
                 
                 for (var i = 0; i < lines.length; i++) {
                     var line = lines[i];
                     
                     if (line.indexOf('m=video') === 0) {
                         inVideoSection = true;
+                        addedBandwidth = false;
                     } else if (line.indexOf('m=') === 0) {
                         inVideoSection = false;
                     }
                     
-                    // 只修改视频部分的 H264 fmtp 行
-                    if (inVideoSection && line.indexOf('a=fmtp:') === 0 && 
-                        line.indexOf('profile-level-id') > 0 && line.indexOf('x-google') === -1) {
-                        line = line + ';x-google-max-bitrate=' + bitrateKbps + 
-                            ';x-google-min-bitrate=' + bitrateKbps + 
-                            ';x-google-start-bitrate=' + bitrateKbps;
+                    result.push(line);
+                    
+                    // 在视频 m= 行后添加 b=AS 带宽限制
+                    if (inVideoSection && line.indexOf('m=video') === 0 && !addedBandwidth) {
+                        result.push('b=AS:' + bitrateKbps);
+                        result.push('b=TIAS:' + (targetBitrate)); // TIAS 以 bps 为单位
+                        addedBandwidth = true;
                     }
                     
-                    result.push(line);
+                    // 为所有视频编解码器的 fmtp 行添加 x-google 码率参数 (CBR: min=max)
+                    if (inVideoSection && line.indexOf('a=fmtp:') === 0 && line.indexOf('x-google') === -1) {
+                        // 获取 payload type
+                        var pt = line.split(':')[1].split(' ')[0];
+                        // 只处理视频相关的 fmtp (排除 rtx 等)
+                        var isVideoCodec = lines.some(function(l) {
+                            return l.indexOf('a=rtpmap:' + pt) === 0 && 
+                                   (l.indexOf('VP8') > 0 || l.indexOf('VP9') > 0 || 
+                                    l.indexOf('H264') > 0 || l.indexOf('AV1') > 0);
+                        });
+                        if (isVideoCodec) {
+                            // CBR 模式: min = max = start
+                            result[result.length - 1] = line + 
+                                ';x-google-max-bitrate=' + bitrateKbps + 
+                                ';x-google-min-bitrate=' + bitrateKbps + 
+                                ';x-google-start-bitrate=' + bitrateKbps;
+                        }
+                    }
                 }
                 return result.join('\r\n');
             };
@@ -505,59 +607,155 @@
             try {
                 var url = $("#txt_url").val();
                 
-                // 准备 URL 参数
-                var conf = sdk.__internal.prepareUrl(url);
+                // 验证 WHIP URL 格式
+                if (url.indexOf('/whip/') === -1) {
+                    throw new Error('Invalid WHIP URL format. Expected: http://server:port/rtc/v1/whip/?app=xxx&stream=xxx');
+                }
                 
                 // 创建 offer
                 var offer = await sdk.pc.createOffer();
                 
-                // 修改 SDP: 强制使用 H.264 Baseline Profile (无 B 帧) + 码率限制
+                // 修改 SDP: 添加码率限制
                 var modifiedSdp = offer.sdp;
-                modifiedSdp = modifiedSdp.replace(/profile-level-id=([0-9a-fA-F]+)/g, 'profile-level-id=42e01f');
                 modifiedSdp = enforceBitrate(modifiedSdp);
+                
+                // 添加 level-asymmetry-allowed=1 以允许更灵活的编码
+                modifiedSdp = modifiedSdp.replace(
+                    /(profile-level-id=[0-9a-fA-F]+)/g, 
+                    '$1;level-asymmetry-allowed=1'
+                );
+                
                 offer.sdp = modifiedSdp;
+                console.log('Modified SDP (video section):', modifiedSdp.split('m=video')[1]?.split('m=')[0] || 'no video');
                 
                 await sdk.pc.setLocalDescription(offer);
 
-                // 发送到服务器
+                // WHIP 协议: 发送 raw SDP 到 WHIP endpoint
                 var session = await new Promise(function(resolve, reject) {
-                    var data = {
-                        api: conf.apiUrl, tid: conf.tid, streamurl: conf.streamUrl,
-                        clientip: null, sdp: offer.sdp
-                    };
-                    console.log("Generated offer: ", data);
+                    console.log("Generated offer (WHIP): ", offer.sdp);
 
                     const xhr = new XMLHttpRequest();
                     xhr.onload = function() {
                         if (xhr.readyState !== xhr.DONE) return;
                         if (xhr.status !== 200 && xhr.status !== 201) return reject(xhr);
-                        const data = JSON.parse(xhr.responseText);
-                        console.log("Got answer: ", data);
-                        return data.code ? reject(xhr) : resolve(data);
+                        var answerSdp = xhr.responseText;
+                        console.log("Got answer (WHIP): ", answerSdp);
+                        
+                        // WHIP 返回的是 raw SDP，构造 session 对象
+                        // 解析 sessionid 从 ice-ufrag
+                        var sessionid = offer.sdp.substr(offer.sdp.indexOf('a=ice-ufrag:') + 'a=ice-ufrag:'.length);
+                        sessionid = sessionid.substr(0, sessionid.indexOf('\n') - 1) + ':';
+                        sessionid += answerSdp.substr(answerSdp.indexOf('a=ice-ufrag:') + 'a=ice-ufrag:'.length);
+                        sessionid = sessionid.substr(0, sessionid.indexOf('\n'));
+                        
+                        resolve({
+                            sdp: answerSdp,
+                            sessionid: sessionid.trim()
+                        });
                     }
-                    xhr.open('POST', conf.apiUrl, true);
-                    xhr.setRequestHeader('Content-type', 'application/json');
-                    xhr.send(JSON.stringify(data));
+                    xhr.open('POST', url, true);
+                    xhr.setRequestHeader('Content-type', 'application/sdp');
+                    xhr.send(offer.sdp);
                 });
 
                 await sdk.pc.setRemoteDescription(
                     new RTCSessionDescription({type: 'answer', sdp: session.sdp})
                 );
                 
+                // 打印服务器选择的 codec profile
+                var answerVideoSection = session.sdp.split('m=video')[1]?.split('m=')[0] || '';
+                var profileMatch = answerVideoSection.match(/profile-level-id=([0-9a-fA-F]+)/);
+                if (profileMatch) {
+                    var profile = profileMatch[1];
+                    var profileName = 'Unknown';
+                    if (profile.startsWith('42e0') || profile.startsWith('42E0')) profileName = 'Constrained Baseline';
+                    else if (profile.startsWith('4200') || profile.startsWith('4200')) profileName = 'Baseline';
+                    else if (profile.startsWith('4d00') || profile.startsWith('4D00')) profileName = 'Main';
+                    else if (profile.startsWith('6400') || profile.startsWith('6400')) profileName = 'High';
+                    else if (profile.startsWith('640c') || profile.startsWith('640C')) profileName = 'Constrained High';
+                    console.log('=== SRS Server selected H.264 Profile ===');
+                    console.log('Profile-level-id:', profile, '(' + profileName + ')');
+                    if (profile.startsWith('42')) {
+                        console.warn('WARNING: Baseline profile selected - may use OpenH264 software encoder');
+                    }
+                }
+                
                 // 协商完成后设置编码参数 (setParameters 必须在协商后调用)
+                var videoSender = null;
                 var senders = sdk.pc.getSenders();
                 for (var i = 0; i < senders.length; i++) {
                     var sender = senders[i];
                     if (sender.track && sender.track.kind === 'video') {
+                        videoSender = sender;
                         var params = sender.getParameters();
+                        console.log('Initial encoding params:', JSON.stringify(params, null, 2));
+                        
                         if (params.encodings && params.encodings.length > 0) {
+                            // CBR 模式：强制高码率
                             params.encodings[0].maxBitrate = targetBitrate;
+                            params.encodings[0].maxFramerate = targetFps;
                             params.encodings[0].scaleResolutionDownBy = 1.0;
+                            // 优先保持帧率
+                            params.degradationPreference = 'maintain-framerate';
+                            // 禁用带宽自适应 (如果支持)
+                            params.encodings[0].networkPriority = 'high';
+                            params.encodings[0].priority = 'high';
+                            
                             await sender.setParameters(params);
                             console.log('Video encoding params set:', params.encodings[0]);
                         }
                     }
                 }
+                
+                // 延迟检查编码器类型
+                setTimeout(async function() {
+                    if (!sdk || !sdk.pc) return;
+                    try {
+                        var stats = await sdk.pc.getStats();
+                        stats.forEach(function(report) {
+                            if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                                var encoder = report.encoderImplementation || 'unknown';
+                                var isHardware = encoder.toLowerCase().indexOf('openh264') < 0 && 
+                                                 encoder.toLowerCase().indexOf('libvpx') < 0;
+                                console.log('=== ENCODER INFO ===');
+                                console.log('Encoder:', encoder);
+                                console.log('Hardware accelerated:', isHardware ? 'YES' : 'NO (software)');
+                                if (!isHardware) {
+                                    console.warn('WARNING: Using software encoder. Bitrate control may be unreliable.');
+                                    console.warn('For better results, try using a browser/machine with hardware H.264 encoding support.');
+                                }
+                            }
+                        });
+                    } catch (e) {}
+                }, 2000);
+                
+                // 持续强制码率 (软件编码器倾向于忽略码率设置)
+                var bitrateEnforcerInterval = setInterval(async function() {
+                    if (!sdk || !sdk.pc || !videoSender) {
+                        clearInterval(bitrateEnforcerInterval);
+                        return;
+                    }
+                    try {
+                        var params = videoSender.getParameters();
+                        if (params.encodings && params.encodings.length > 0) {
+                            var needsUpdate = false;
+                            if (params.encodings[0].maxBitrate !== targetBitrate) {
+                                params.encodings[0].maxBitrate = targetBitrate;
+                                needsUpdate = true;
+                            }
+                            if (params.degradationPreference !== 'maintain-framerate') {
+                                params.degradationPreference = 'maintain-framerate';
+                                needsUpdate = true;
+                            }
+                            if (needsUpdate) {
+                                await videoSender.setParameters(params);
+                                console.log('Re-applied bitrate constraint:', targetBitrate);
+                            }
+                        }
+                    } catch (e) {
+                        // Ignore errors (connection may be closing)
+                    }
+                }, 2000);
 
                 // 更新 UI
                 $('#sessionid').text(session.sessionid);
@@ -574,6 +772,66 @@
                         }
                     }
                 };
+                
+                // 定时监控发送统计
+                var lastVideoStats = { timestamp: 0, framesSent: 0, bytesSent: 0 };
+                var lowBitrateCount = 0;
+                var statsInterval = setInterval(async function() {
+                    if (!sdk || !sdk.pc) {
+                        clearInterval(statsInterval);
+                        return;
+                    }
+                    try {
+                        var stats = await sdk.pc.getStats();
+                        stats.forEach(async function(report) {
+                            if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                                var now = report.timestamp;
+                                var framesSent = report.framesSent || 0;
+                                var bytesSent = report.bytesSent || 0;
+                                
+                                if (lastVideoStats.timestamp > 0) {
+                                    var elapsed = (now - lastVideoStats.timestamp) / 1000;
+                                    var fps = (framesSent - lastVideoStats.framesSent) / elapsed;
+                                    var bitrateKbps = (bytesSent - lastVideoStats.bytesSent) * 8 / elapsed / 1000;
+                                    var targetKbps = targetBitrate / 1000;
+                                    
+                                    $('#fps_info').text(fps.toFixed(1) + ' FPS');
+                                    console.log('Outbound stats - FPS:', fps.toFixed(1), 
+                                        'Bitrate:', bitrateKbps.toFixed(0) + 'kbps (target: ' + targetKbps + 'kbps)',
+                                        'Encoder:', report.encoderImplementation,
+                                        'QualityLimit:', report.qualityLimitationReason);
+                                    
+                                    // 如果码率持续低于目标的 50%，尝试请求关键帧
+                                    if (bitrateKbps < targetKbps * 0.5) {
+                                        lowBitrateCount++;
+                                        if (lowBitrateCount >= 3 && videoSender) {
+                                            console.warn('Bitrate too low, requesting keyframe...');
+                                            // 通过 replaceTrack 强制编码器重置
+                                            var currentTrack = videoSender.track;
+                                            if (currentTrack) {
+                                                try {
+                                                    // 请求关键帧 (某些浏览器支持)
+                                                    var params = videoSender.getParameters();
+                                                    params.encodings[0].maxBitrate = targetBitrate;
+                                                    await videoSender.setParameters(params);
+                                                } catch (e) {
+                                                    console.warn('Failed to reset encoder:', e);
+                                                }
+                                            }
+                                            lowBitrateCount = 0;
+                                        }
+                                    } else {
+                                        lowBitrateCount = 0;
+                                    }
+                                }
+                                
+                                lastVideoStats = { timestamp: now, framesSent: framesSent, bytesSent: bytesSent };
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('Stats error:', e);
+                    }
+                }, 1000);
 
                 isPublishing = true;
                 updatePublishUI(true);
@@ -694,7 +952,7 @@
 
         // 初始化
         var query = parse_query_string();
-        srs_init_rtc("#txt_url", query);
+        srs_init_whip("#txt_url", query);
 
         // 检查 HTTPS 要求
         if (!navigator.mediaDevices && window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {

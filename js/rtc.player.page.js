@@ -168,7 +168,7 @@ $(function () {
         }
     }
 
-    // --- 核心播放逻辑 ---
+    // --- 核心播放逻辑 (WHEP 协议) ---
     async function startPlay(urlOverride) {
         const url = urlOverride || $("#txt_url").val();
         if (!url) return;
@@ -177,14 +177,15 @@ $(function () {
         // 优先从下拉框获取流名，若无则尝试从 URL 解析
         let streamName = $("#user_name").val();
         if (!streamName || streamName === 'livestream') {
-            const match = url.match(/\/([^\/\?]+)(\?|$)/);
-            streamName = match ? match[1] : 'livestream';
+            // WHEP URL 格式: http://server:port/rtc/v1/whip-play/?app=live&stream=xxx
+            const streamMatch = url.match(/[?&]stream=([^&]+)/);
+            streamName = streamMatch ? streamMatch[1] : 'livestream';
         }
         
         $("#record_stream_name").val(streamName);
         fetchRecordings(); // 异步触发搜索
 
-        // 2. 执行 WebRTC 播放
+        // 2. 执行 WebRTC 播放 (使用 WHEP 协议)
         if (sdk) {
             sdk.close();
             sdk = null;
@@ -193,7 +194,8 @@ $(function () {
         $('#rtc_media_player').show();
         initStatusGraphs();
         
-        sdk = new SrsRtcPlayerAsync();
+        // 使用 SrsRtcWhipWhepAsync 替代 SrsRtcPlayerAsync
+        sdk = new SrsRtcWhipWhepAsync();
         const videoElement = document.getElementById("rtc_media_player");
         $(videoElement).prop('srcObject', sdk.stream);
         videoElement.src = ""; // 确保不是在播放录制文件
@@ -207,7 +209,7 @@ $(function () {
             sdk.close();
             sdk = null;
             $('#rtc_media_player').hide();
-            console.error("SRS Play Error:", e);
+            console.error("SRS WHEP Play Error:", e);
         }
     }
 
@@ -254,7 +256,7 @@ $(function () {
 
                 $btn.click(() => {
                     $("#txt_url").val(stream.name);
-                    srs_init_rtc("#txt_url", { ...query, stream: stream.name });
+                    srs_init_whep("#txt_url", { ...query, stream: stream.name });
                     $selector.val(stream.name);
                     startPlay();
                 });
@@ -412,8 +414,8 @@ $(function () {
     $("#user_name").change(function() {
         const name = $(this).val();
         $("#record_stream_name").val(name);
-        srs_init_rtc("#txt_url", { ...utils.parseQuery(), stream: name });
-        fetchRecordings(); // 切换用户下拉框也同步刷新录制
+        srs_init_whep("#txt_url", { ...utils.parseQuery(), stream: name });
+        fetchRecordings();
     });
 
     // 定时刷新器
@@ -439,7 +441,7 @@ $(function () {
 
     // --- 初始加载 ---
     const query = utils.parseQuery();
-    srs_init_rtc("#txt_url", query);
+    srs_init_whep("#txt_url", query);
     initStatusGraphs();
     fetchActiveStreams();
 

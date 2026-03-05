@@ -130,7 +130,8 @@ function build_default_whip_whep_url(query, apiPath) {
     var vhost = (!query.vhost)? window.location.hostname:query.vhost;
     var app = (!query.app)? "live":query.app;
     var stream = (!query.stream)? "livestream":query.stream;
-    var api = ':' + (query.api || (window.location.protocol === 'http:' ? '1985' : '1990'));
+    // Match old API behavior: HTTPS uses port 443 (behind reverse proxy), HTTP uses 1985
+    var api = query.api ? ':' + query.api : (window.location.protocol === 'http:' ? ':1985' : '');
     const realApiPath = query.path || apiPath;
 
     var queries = [];
