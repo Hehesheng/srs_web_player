@@ -1289,6 +1289,86 @@ function wire() {
         }
     });
 
+    // The host video has no native controls: it uses the same bar as members.
+    (() => {
+        const video = $("host-video");
+        const playButton = $("btn-host-play");
+        const playIcon = $("host-play-icon");
+        const pauseIcon = $("host-pause-icon");
+        const seek = $("host-seek");
+        const volume = $("host-volume");
+        const muteButton = $("btn-host-mute");
+        let scrubbing = false;
+
+        const syncIcon = () => {
+            const playing = !video.paused && !video.ended;
+            playIcon.classList.toggle("hidden", playing);
+            pauseIcon.classList.toggle("hidden", !playing);
+            playButton.title = playing ? "暂停" : "播放";
+        };
+        const syncVolumeIcon = () => {
+            muteButton.classList.toggle("text-rose-300", video.muted || video.volume === 0);
+        };
+        const syncTimeline = () => {
+            const duration = Number.isFinite(video.duration) ? video.duration : 0;
+            seek.max = String(duration || 0);
+            if (!scrubbing) seek.value = String(video.currentTime || 0);
+            $("host-current").textContent = fmtTime(video.currentTime || 0);
+            $("host-duration").textContent = fmtTime(duration);
+        };
+
+        playButton.addEventListener("click", () => {
+            if (!state.host) return;
+            if (video.paused || video.ended) state.host.play();
+            else video.pause();
+        });
+        seek.addEventListener("input", () => {
+            scrubbing = true;
+            $("host-current").textContent = fmtTime(Number(seek.value) || 0);
+        });
+        seek.addEventListener("change", () => {
+            const target = Number(seek.value) || 0;
+            scrubbing = false;
+            try {
+                video.currentTime = Math.min(target, video.duration || target);
+            } catch {
+                // ignore
+            }
+            syncTimeline();
+        });
+        muteButton.addEventListener("click", () => {
+            video.muted = !video.muted;
+            volume.value = video.muted ? "0" : String(Math.round(video.volume * 100));
+            syncVolumeIcon();
+        });
+        volume.addEventListener("input", (event) => {
+            const value = Number(event.target.value) / 100;
+            video.volume = value;
+            video.muted = value === 0;
+            syncVolumeIcon();
+        });
+        $("btn-host-fullscreen").addEventListener("click", async () => {
+            const shell = $("host-shell");
+            try {
+                if (document.fullscreenElement) await document.exitFullscreen();
+                else await shell.requestFullscreen();
+            } catch {
+                toast("当前浏览器不支持全屏", "error");
+            }
+        });
+
+        for (const name of ["play", "pause", "ended", "loadedmetadata", "durationchange", "seeking"]) {
+            video.addEventListener(name, syncIcon);
+        }
+        for (const name of ["timeupdate", "loadedmetadata", "durationchange", "seeked"]) {
+            video.addEventListener(name, syncTimeline);
+        }
+        video.addEventListener("volumechange", syncVolumeIcon);
+        syncIcon();
+        syncTimeline();
+        syncVolumeIcon();
+    })();
+
     window.addEventListener("beforeunload", (event) => {
         if (state.role === "host" && state.host) {
             event.preventDefault();

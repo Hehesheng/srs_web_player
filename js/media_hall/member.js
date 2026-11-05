@@ -211,7 +211,7 @@ export class MemberController {
         if (this.sync) this.sync.setHost(host);
         this.onHostState(host, "room");
         if (host.online === false) {
-            this.onOverlay("offline", "房主已离线，等待重连…", null, null);
+            this.onOverlay("offline", "房主已离线，等待重连…（持续离线将结束房间）", null, null);
         } else {
             this.onOverlay("offline", null, null, null);
         }
@@ -290,7 +290,7 @@ export class MemberController {
         this.onHostState(host, event);
         if (Array.isArray(payload.members)) this.onMembers(payload.members);
         if (host.online === false) {
-            this.onOverlay("offline", "房主已离线，等待重连…", null, null);
+            this.onOverlay("offline", "房主已离线，等待重连…（持续离线将结束房间）", null, null);
         } else {
             this.onOverlay("offline", null, null, null);
         }

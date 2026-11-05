@@ -47,7 +47,8 @@ export class HostController {
         // With an empty playlist there is nothing to load yet; the worker still
         // connects so the room exists and members can wait for the first item.
         video.preload = "metadata";
-        video.controls = true;
+        // The host shares the member control bar, so the native one stays off.
+        video.controls = false;
         video.muted = false;
 
         const listen = (name, handler) => {
