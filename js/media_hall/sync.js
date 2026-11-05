@@ -13,6 +13,9 @@
  * network stalls and shrinks slowly during long stable periods.
  */
 
+const MIN_SEEK_INTERVAL = 1500;
+const CORRECTION_COOLDOWN = 8000;
+
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const median = (values) => {
     if (!values.length) return 0;
@@ -43,7 +46,8 @@ export class SyncController {
         this.lastStallAt = 0;
         this.stallStart = 0;
 
-        this.lastHardSeek = 0;
+        this.lastHardSeek = -1e9;
+        this.lastAnySeek = -1e9;
         this.hardSeeks = [];
         this.bigDriftSince = 0;
         this.pendingInitialSeek = true;
@@ -71,7 +75,9 @@ export class SyncController {
             this.onOverlay("buffering", null);
         };
         this._onSeeking = () => {
-            if (!this.allowSeek) this.followNow(true);
+            // A scripted/allowed seek must be reverted immediately, even if a
+            // correction just happened.
+            if (!this.allowSeek) this.followNow(true, true);
         };
         this._onSeeked = () => {
             this.allowSeek = false;
@@ -199,17 +205,24 @@ export class SyncController {
     }
 
     // -- corrections ---------------------------------------------------
-    followNow(force = false) {
+    followNow(force = false, urgent = false) {
         const target = this.targetPosition();
         if (target == null) return;
-        this.hardSeek(target, force);
+        this.hardSeek(target, force, urgent);
     }
 
-    hardSeek(target, force = false) {
+    hardSeek(target, force = false, urgent = false) {
         const now = performance.now();
-        if (!force && now - this.lastHardSeek < 8000) return;
+        if (!urgent) {
+            if (now - this.lastAnySeek < MIN_SEEK_INTERVAL) return;
+            if (!force && now - this.lastHardSeek < CORRECTION_COOLDOWN) return;
+        }
 
+        this.lastAnySeek = now;
+        // Forced seeks (initial positioning, resync) are not corrections and
+        // must not block the 3s rule that follows a slow start.
         if (!force) {
+            this.lastHardSeek = now;
             this.hardSeeks.push(now);
             this.hardSeeks = this.hardSeeks.filter((at) => now - at < 60000);
             if (this.hardSeeks.length >= 3) {
@@ -217,8 +230,6 @@ export class SyncController {
                 this.hardSeeks = [];
             }
         }
-
-        this.lastHardSeek = now;
         this.pendingInitialSeek = false;
         this.bigDriftSince = 0;
         this.allowSeek = true;
