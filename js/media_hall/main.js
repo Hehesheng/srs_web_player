@@ -569,7 +569,10 @@ async function addHostFiles(files) {
             session.media_url = data.media_url;
             persistHostSession();
             applyHostPlaylistPayload(data);
-            if (data.active) switchHostToMedia(data.media, data.media_url);
+            if (data.active) {
+                switchHostToMedia(data.media, data.media_url);
+                state.host.play();
+            }
             toast(`已添加「${file.name}」`, "success");
         } catch (error) {
             toast(`${file.name}：${error.message || "添加失败"}`, "error");
