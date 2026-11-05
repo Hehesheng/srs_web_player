@@ -53,7 +53,13 @@ export class MemberController {
 
     start() {
         const video = this.video;
-        video.src = this.session.media_url;
+        if (this.session.media_url) {
+            video.src = this.session.media_url;
+        } else {
+            // The room exists but the host has not picked anything yet.
+            video.removeAttribute("src");
+            this.onOverlay("media", "等待房主添加内容…", null, null);
+        }
         video.preload = "auto";
         video.controls = false;
         video.muted = false;
@@ -204,19 +210,35 @@ export class MemberController {
     }
 
     applyMedia(room) {
-        const media = room.media;
-        if (!media || !media.media_id) return;
+        const media = room.media && room.media.media_id ? room.media : null;
         const previousId = this.mediaId;
+        if (!media) {
+            this.mediaId = null;
+            this.session.media = null;
+            this.session.media_url = null;
+            if (previousId !== null || this.video.getAttribute("src")) this.clearMedia();
+            return;
+        }
         this.mediaId = media.media_id;
         if (room.media_url) this.session.media_url = room.media_url;
         this.session.media = media;
-        if (previousId === null || previousId === media.media_id) return;
+        if (previousId === null) {
+            // The player already loaded this source in start(); only an empty
+            // room that just received its first item needs a switch here.
+            if (!this.video.getAttribute("src")) this.switchMedia();
+            return;
+        }
+        if (previousId === media.media_id) return;
         this.switchMedia();
         this.onMediaChanged(media);
     }
 
     switchMedia() {
         const video = this.video;
+        if (!this.session.media_url) {
+            this.clearMedia();
+            return;
+        }
         if (this.sync) this.sync.resetForMedia();
         try {
             video.pause();
@@ -226,6 +248,22 @@ export class MemberController {
         video.src = this.session.media_url;
         video.load();
         this.onOverlay("media", null, null, null);
+    }
+
+    clearMedia() {
+        if (this.sync) this.sync.resetForMedia();
+        try {
+            this.video.pause();
+        } catch {
+            // ignore
+        }
+        this.video.removeAttribute("src");
+        try {
+            this.video.load();
+        } catch {
+            // ignore
+        }
+        this.onOverlay("media", "等待房主添加内容…", null, null);
     }
 
     handleHostEvent(payload, event) {

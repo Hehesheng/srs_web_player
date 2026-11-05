@@ -9,7 +9,7 @@ const HEARTBEAT_PLAYING_MS = 250;
 const HEARTBEAT_PAUSED_MS = 1000;
 
 export class HostController {
-    constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress }) {
+    constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress, onEnded }) {
         this.video = video;
         this.file = file;
         this.session = session;
@@ -20,6 +20,7 @@ export class HostController {
         this.onClosed = onClosed || (() => {});
         this.onMetrics = onMetrics || (() => {});
         this.onProgress = onProgress || (() => {});
+        this.onEnded = onEnded || (() => {});
 
         this.worker = null;
         this.objectUrl = null;
@@ -38,11 +39,13 @@ export class HostController {
         if (this.file) {
             this.objectUrl = URL.createObjectURL(this.file);
             video.src = this.objectUrl;
-        } else {
+        } else if (this.session.media_url) {
             // URL rooms are relayed by the server; the host plays the same
             // signed media URL as members so it remains the timing authority.
             video.src = this.session.media_url;
         }
+        // With an empty playlist there is nothing to load yet; the worker still
+        // connects so the room exists and members can wait for the first item.
         video.preload = "metadata";
         video.controls = true;
         video.muted = false;
@@ -95,6 +98,7 @@ export class HostController {
             this.mediaEnded = true;
             this.waiting = false;
             this.sendRaw({ type: "end" });
+            this.onEnded();
         });
         listen("error", () => {
             const code = video.error ? video.error.code : 0;
@@ -179,14 +183,6 @@ export class HostController {
     }
 
     // -- media swap ----------------------------------------------------
-    suspendMedia() {
-        this.sendRaw({ type: "suspend" });
-    }
-
-    resumeMedia() {
-        this.sendRaw({ type: "resume" });
-    }
-
     /** Swap the locally played file while the room and its socket stay alive. */
     switchFile(file) {
         this.file = file;
@@ -208,6 +204,71 @@ export class HostController {
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
         this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+    }
+
+    /** Switch to a server-relayed URL item (url rooms and url playlist items). */
+    switchUrl(url) {
+        this.file = null;
+        if (this.worker) this.worker.postMessage({ type: "file", file: null });
+
+        const video = this.video;
+        const previousUrl = this.objectUrl;
+        this.objectUrl = null;
+        this.ready = false;
+        this.waiting = false;
+        this.mediaEnded = false;
+        this.seq = (this.seq + 1) >>> 0;
+        try {
+            video.pause();
+        } catch {
+            // ignore
+        }
+        if (url) video.src = url;
+        else video.removeAttribute("src");
+        video.load();
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+    }
+
+    /** Drop the current media when the playlist becomes empty. */
+    clearMedia() {
+        this.file = null;
+        if (this.worker) this.worker.postMessage({ type: "file", file: null });
+
+        const video = this.video;
+        const previousUrl = this.objectUrl;
+        this.objectUrl = null;
+        this.ready = false;
+        this.waiting = false;
+        this.mediaEnded = false;
+        try {
+            video.pause();
+        } catch {
+            // ignore
+        }
+        video.removeAttribute("src");
+        try {
+            video.load();
+        } catch {
+            // ignore
+        }
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+    }
+
+    play() {
+        const video = this.video;
+        if (!video.getAttribute("src")) return;
+        let promise;
+        try {
+            promise = video.play();
+        } catch {
+            this.onError("浏览器阻止了自动播放，请手动点击播放");
+            return;
+        }
+        if (promise && typeof promise.catch === "function") {
+            promise.catch(() => this.onError("浏览器阻止了自动播放，请手动点击播放"));
+        }
     }
 
     handleWorkerMessage(message) {

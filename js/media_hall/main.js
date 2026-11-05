@@ -21,6 +21,8 @@ import {
 const HOST_KEY = "hall_host_session";
 const MEMBER_PREFIX = "hall_member_";
 const MAX_HOST_FILE_BYTES = 64 * 1024 * 1024 * 1024;
+const MAX_PLAYLIST_ITEMS = 100;
+const AUTOPLAY_KEY = "hall_autoplay";
 const MAX_SUBTITLE_BYTES = 10 * 1024 * 1024;
 const SUBTITLE_TRACK_FLAG = "hallSubtitle";
 const SUBTITLE_TRACK_SELECTOR = "track[data-hall-subtitle]";
@@ -41,6 +43,9 @@ const state = {
     room: null,
     host: null,
     member: null,
+    // Playlist entries the host picked in this tab; needed to serve bytes.
+    playlistFiles: new Map(),
+    playlist: [],
 };
 
 const overlayEntries = new Map();
@@ -226,38 +231,45 @@ function setKind(kind) {
     showError("create-error", "");
 }
 
+function validateHostFile(file) {
+    if (!file) return "没有选择文件";
+    if (!isLikelyVideo(file)) return "请选择浏览器可播放的视频文件（mp4 / webm / mov 等）";
+    if (file.size <= 0) return "文件为空，无法播放";
+    if (file.size > MAX_HOST_FILE_BYTES) return "文件超过 64GB，暂不支持";
+    return null;
+}
+
 async function createRoom() {
     showError("create-error", "");
     const name = ($("create-name").value || "").trim() || "媒体播放厅";
     const subtitleInput = $("create-subtitle");
     const subtitleFile = subtitleInput && subtitleInput.files ? subtitleInput.files[0] : null;
-    let media;
-    let file = null;
+    let media = null;
+    let files = [];
 
     if (state.kind === "host_file") {
-        file = $("create-file").files[0];
-        if (!file) {
-            showError("create-error", "请先选择一个视频文件");
+        files = Array.from(($("create-file").files || []));
+        if (files.length > MAX_PLAYLIST_ITEMS) {
+            showError("create-error", `一次最多添加 ${MAX_PLAYLIST_ITEMS} 个视频`);
             return;
         }
-        if (!isLikelyVideo(file)) {
-            showError("create-error", "请选择浏览器可播放的视频文件（mp4 / webm / mov 等）");
-            return;
+        for (const file of files) {
+            const problem = validateHostFile(file);
+            if (problem) {
+                showError("create-error", `${file.name}：${problem}`);
+                return;
+            }
         }
-        if (file.size <= 0) {
-            showError("create-error", "文件为空，无法创建房间");
-            return;
+        // Choosing files is optional: an empty room can be filled later.
+        const first = files[0] || null;
+        if (first) {
+            media = {
+                kind: "host_file",
+                name: first.name,
+                size: first.size,
+                mime: first.type || "application/octet-stream",
+            };
         }
-        if (file.size > MAX_HOST_FILE_BYTES) {
-            showError("create-error", "文件超过 64GB，暂不支持");
-            return;
-        }
-        media = {
-            kind: "host_file",
-            name: file.name,
-            size: file.size,
-            mime: file.type || "application/octet-stream",
-        };
     } else {
         const url = ($("create-url").value || "").trim();
         if (!/^https?:\/\//i.test(url)) {
@@ -271,7 +283,9 @@ async function createRoom() {
     const button = $("btn-create");
     setButtonsBusy(button, true, "正在创建…");
     try {
-        const data = await request("/hall/api/rooms", { method: "POST", body: { name, media } });
+        const body = { name };
+        if (media) body.media = media;
+        const data = await request("/hall/api/rooms", { method: "POST", body });
         const session = {
             room_id: data.room_id,
             room_code: data.room_code,
@@ -281,14 +295,13 @@ async function createRoom() {
             media: data.media,
         };
         state.room = session;
-        try {
-            sessionStorage.setItem(HOST_KEY, JSON.stringify(session));
-        } catch {
-            // ignore storage failures
-        }
+        persistHostSession();
         window.history.replaceState({}, "", `?room=${encodeURIComponent(data.room_code)}`);
         if (subtitleInput) subtitleInput.value = "";
-        startHost(session, file, data.room);
+        const fileInput = $("create-file");
+        if (fileInput) fileInput.value = "";
+        startHost(session, files[0] || null, data.room);
+        if (files.length > 1) addHostFiles(files.slice(1));
         if (subtitleFile) uploadInitialSubtitle(session, subtitleFile);
     } catch (error) {
         showError("create-error", error.message || "创建房间失败");
@@ -344,6 +357,8 @@ function roomSummaryLine(room) {
     const parts = [`${Number(room.member_count) || 0} 人`];
     if (!room.host_online) parts.push("房主离线");
     if (room.media_name) parts.push(room.media_name);
+    else if (Number(room.playlist_count) > 0) parts.push(`${room.playlist_count} 个视频`);
+    else parts.push("等待添加内容");
     return parts.join(" · ");
 }
 
@@ -429,6 +444,195 @@ function updateHostMembers(members) {
     });
 }
 
+// -- playlist --------------------------------------------------------
+function hostMediaLabel(media) {
+    return media ? `${media.name} · ${fmtBytes(media.size)}` : "播放列表为空";
+}
+
+function updateHostMediaLabel(media) {
+    const label = $("host-media-name");
+    if (label) label.textContent = hostMediaLabel(media);
+}
+
+function setHostPlaylist(items) {
+    state.playlist = Array.isArray(items) ? items : [];
+    renderHostPlaylist();
+}
+
+function renderHostPlaylist() {
+    const list = $("host-playlist");
+    if (!list) return;
+    list.replaceChildren();
+    if (!state.playlist.length) {
+        const empty = document.createElement("li");
+        empty.className = "text-xs italic text-slate-600";
+        empty.textContent = "播放列表为空，点「添加视频」选择文件";
+        list.appendChild(empty);
+        return;
+    }
+    state.playlist.forEach((item, index) => {
+        const row = document.createElement("li");
+        row.className =
+            "flex items-center justify-between gap-3 rounded-xl border border-slate-800/80 bg-slate-900/40 px-3 py-2";
+
+        const left = document.createElement("div");
+        left.className = "min-w-0";
+        const title = document.createElement("div");
+        title.className = `truncate text-xs font-semibold ${item.active ? "text-sky-300" : "text-slate-200"}`;
+        title.textContent = `${index + 1}. ${item.name || "视频"}`;
+        const meta = document.createElement("div");
+        meta.className = "mt-0.5 text-[10px] text-slate-500";
+        meta.textContent = [item.active ? "播放中" : "", fmtBytes(item.size || 0)]
+            .filter(Boolean)
+            .join(" · ");
+        left.append(title, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "flex shrink-0 items-center gap-2";
+        if (!item.active) {
+            const playButton = document.createElement("button");
+            playButton.type = "button";
+            playButton.className =
+                "rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300";
+            playButton.textContent = "播放";
+            playButton.addEventListener("click", () => playPlaylistItem(item));
+            actions.appendChild(playButton);
+        }
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className =
+            "rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300 transition hover:bg-rose-500/20";
+        removeButton.textContent = "移除";
+        removeButton.addEventListener("click", () => removePlaylistItem(item));
+        actions.appendChild(removeButton);
+
+        row.append(left, actions);
+        list.appendChild(row);
+    });
+}
+
+function autoplayEnabled() {
+    const box = $("host-autoplay");
+    return box ? box.checked : true;
+}
+
+function applyHostPlaylistPayload(data) {
+    if (!data) return;
+    if (Array.isArray(data.playlist)) setHostPlaylist(data.playlist);
+    if ("media" in data) updateHostMediaLabel(data.media);
+}
+
+function switchHostToMedia(media, mediaUrl) {
+    const host = state.host;
+    if (!host) return;
+    if (!media) {
+        host.clearMedia();
+        return;
+    }
+    if (media.kind === "url") {
+        host.switchUrl(mediaUrl || state.room.media_url);
+        return;
+    }
+    const file = state.playlistFiles.get(media.media_id);
+    if (!file) {
+        toast("这个文件的本地副本已丢失，请重新添加该文件", "error");
+        return;
+    }
+    host.switchFile(file);
+}
+
+async function addHostFiles(files) {
+    const session = state.room;
+    if (!session || !state.host || !Array.isArray(files) || !files.length) return;
+    for (const file of files) {
+        const problem = validateHostFile(file);
+        if (problem) {
+            toast(`${file.name}：${problem}`, "error");
+            continue;
+        }
+        try {
+            const data = await request(
+                `/hall/api/rooms/${encodeURIComponent(session.room_id)}/playlist`,
+                {
+                    method: "POST",
+                    headers: { "X-Host-Token": session.host_token },
+                    body: {
+                        kind: "host_file",
+                        name: file.name,
+                        size: file.size,
+                        mime: file.type || "application/octet-stream",
+                    },
+                }
+            );
+            state.playlistFiles.set(data.media_id, file);
+            session.media = data.media;
+            session.media_url = data.media_url;
+            persistHostSession();
+            applyHostPlaylistPayload(data);
+            if (data.active) switchHostToMedia(data.media, data.media_url);
+            toast(`已添加「${file.name}」`, "success");
+        } catch (error) {
+            toast(`${file.name}：${error.message || "添加失败"}`, "error");
+        }
+    }
+}
+
+async function playPlaylistItem(item) {
+    const session = state.room;
+    if (!session || !state.host || !item) return;
+    if (item.kind === "host_file" && !state.playlistFiles.has(item.media_id)) {
+        toast("这个文件的本地副本已丢失，请重新添加该文件", "error");
+        return;
+    }
+    try {
+        const data = await request(
+            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/playlist/${encodeURIComponent(item.media_id)}/activate`,
+            { method: "POST", headers: { "X-Host-Token": session.host_token } }
+        );
+        session.media = data.media;
+        session.media_url = data.media_url;
+        persistHostSession();
+        applyHostPlaylistPayload(data);
+        switchHostToMedia(data.media, data.media_url);
+        state.host.play();
+    } catch (error) {
+        toast(error.message || "切换视频失败", "error");
+    }
+}
+
+async function removePlaylistItem(item) {
+    const session = state.room;
+    if (!session || !state.host || !item) return;
+    if (!window.confirm(`从播放列表移除「${item.name || "这个视频"}」？`)) return;
+    try {
+        const data = await request(
+            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/playlist/${encodeURIComponent(item.media_id)}`,
+            { method: "DELETE", headers: { "X-Host-Token": session.host_token } }
+        );
+        state.playlistFiles.delete(item.media_id);
+        session.media = data.media;
+        session.media_url = data.media_url;
+        persistHostSession();
+        applyHostPlaylistPayload(data);
+        if (item.active) switchHostToMedia(data.media, data.media_url);
+        toast("已从播放列表移除", "success");
+    } catch (error) {
+        toast(error.message || "移除失败", "error");
+    }
+}
+
+function handleHostEnded() {
+    const items = Array.isArray(state.playlist) ? state.playlist : [];
+    const index = items.findIndex((item) => item.active);
+    const next = index >= 0 ? items[index + 1] : null;
+    if (!autoplayEnabled()) return;
+    if (!next) {
+        toast("播放列表已播完", "info");
+        return;
+    }
+    playPlaylistItem(next);
+}
+
 function renderHostSubtitles() {
     const select = $("host-subtitle-select");
     if (!select) return;
@@ -483,6 +687,8 @@ function applyHostRoomState(roomState) {
     if (ts) hostRoomStateTs = ts;
     hostRoomState = roomState;
     if (Array.isArray(roomState.members)) updateHostMembers(roomState.members);
+    if (Array.isArray(roomState.playlist)) setHostPlaylist(roomState.playlist);
+    updateHostMediaLabel(roomState.media);
     renderHostSubtitles();
 }
 
@@ -554,55 +760,11 @@ function wireHostSubtitleControls() {
     }
 }
 
-async function changeHostMedia(file) {
-    const session = state.room;
-    if (!session || !state.host || !file) return;
-    if (!isLikelyVideo(file)) {
-        toast("请选择浏览器可播放的视频文件（mp4 / webm / mov 等）", "error");
-        return;
-    }
-    if (file.size <= 0) {
-        toast("文件为空，无法切换", "error");
-        return;
-    }
-    if (file.size > MAX_HOST_FILE_BYTES) {
-        toast("文件超过 64GB，暂不支持", "error");
-        return;
-    }
-    if (!window.confirm("切换视频后房间不会解散，所有成员会从头开始播放。确定切换吗？")) return;
-
-    const host = state.host;
-    const button = $("btn-change-media");
-    setButtonsBusy(button, true, "切换中…");
-    host.suspendMedia();
+function persistHostSession() {
     try {
-        const data = await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/media`, {
-            method: "POST",
-            headers: { "X-Host-Token": session.host_token },
-            body: {
-                kind: "host_file",
-                name: file.name,
-                size: file.size,
-                mime: file.type || "application/octet-stream",
-            },
-        });
-        session.media = data.media;
-        session.media_url = data.media_url;
-        try {
-            sessionStorage.setItem(HOST_KEY, JSON.stringify(session));
-        } catch {
-            // ignore storage failures
-        }
-        $("host-media-name").textContent = `${data.media.name} · ${fmtBytes(data.media.size)}`;
-        host.switchFile(file);
-        toast(`已切换到「${file.name}」`, "success");
-    } catch (error) {
-        toast(error.message || "切换视频失败", "error");
-    } finally {
-        host.resumeMedia();
-        setButtonsBusy(button, false);
-        const input = $("host-media-file");
-        if (input) input.value = "";
+        sessionStorage.setItem(HOST_KEY, JSON.stringify(state.room));
+    } catch {
+        // ignore storage failures
     }
 }
 
@@ -612,11 +774,14 @@ function startHost(session, file, room) {
         state.host = null;
     }
     state.role = "host";
+    state.playlistFiles = new Map();
+    if (file && session.media && session.media.media_id) {
+        state.playlistFiles.set(session.media.media_id, file);
+    }
+    state.playlist = [];
 
     $("host-room-name").textContent = room && room.name ? room.name : session.name;
-    $("host-media-name").textContent = session.media
-        ? `${session.media.name} · ${fmtBytes(session.media.size)}`
-        : "在线视频";
+    updateHostMediaLabel(session.media);
     $("host-room-code").textContent = session.room_code;
     $("host-position").textContent = "00:00";
     $("host-rate").textContent = "1.00x";
@@ -624,6 +789,7 @@ function startHost(session, file, room) {
     hostRoomState = room || null;
     hostRoomStateTs = 0;
     updateHostMembers(room ? room.members : []);
+    setHostPlaylist((room && room.playlist) || []);
     renderHostSubtitles();
     setStatusBadge("host-status", "等待连接", "muted");
     showView("host");
@@ -642,6 +808,7 @@ function startHost(session, file, room) {
         onMembers: (members) => updateHostMembers(members),
         onRoomState: (roomState) => applyHostRoomState(roomState),
         onError: (message) => toast(message, "error"),
+        onEnded: () => handleHostEnded(),
         onMetrics: ({ buffered }) => {
             $("host-buffered").textContent = fmtBytes(buffered);
         },
@@ -779,6 +946,38 @@ function renderMemberOverlay() {
     }
 }
 
+function renderMemberPlaylist(roomState) {
+    const list = $("member-playlist");
+    const count = $("member-playlist-count");
+    if (!list) return;
+    const items = roomState && Array.isArray(roomState.playlist) ? roomState.playlist : [];
+    if (count) count.textContent = `${items.length} 项`;
+    list.replaceChildren();
+    if (!items.length) {
+        const empty = document.createElement("li");
+        empty.className = "text-xs italic text-slate-600";
+        empty.textContent = "房主还未添加内容";
+        list.appendChild(empty);
+        return;
+    }
+    items.forEach((item, index) => {
+        const row = document.createElement("li");
+        row.className =
+            "flex items-center justify-between gap-3 rounded-xl border border-slate-800/80 bg-slate-900/40 px-3 py-2";
+        const title = document.createElement("div");
+        title.className = `min-w-0 truncate text-xs ${item.active ? "font-semibold text-sky-300" : "text-slate-300"}`;
+        title.textContent = `${index + 1}. ${item.name || "视频"}`;
+        row.appendChild(title);
+        if (item.active) {
+            const badge = document.createElement("span");
+            badge.className = "shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold text-sky-300";
+            badge.textContent = "播放中";
+            row.appendChild(badge);
+        }
+        list.appendChild(row);
+    });
+}
+
 function updateMemberMembers(members) {
     renderMembers($("member-members"), members, {
         hostName: "房主",
@@ -894,6 +1093,8 @@ function startMember(session, room) {
     setMemberStatus("正在连接房间…");
     if (room) {
         updateMemberMembers(room.members || []);
+        renderMemberPlaylist(room);
+        if (!room.media) setMemberStatus("等待房主添加内容…");
         if (room.host && room.host.online !== false) {
             setStatusBadge("member-host-badge", "房主在线", "good");
         }
@@ -919,6 +1120,7 @@ function startMember(session, room) {
             if (ts && ts < memberRoomStateTs) return;
             if (ts) memberRoomStateTs = ts;
             memberRoomState = roomState || null;
+            renderMemberPlaylist(roomState);
             applyMemberSubtitles(roomState);
         },
         onHostState: (host) => {
@@ -931,6 +1133,9 @@ function startMember(session, room) {
             );
             if (!online) {
                 setMemberStatus("房主已离线，等待重新连接…");
+                setMemberOverlay("paused", null, null, null);
+            } else if (!memberRoomState || !memberRoomState.media) {
+                setMemberStatus("等待房主添加内容…");
                 setMemberOverlay("paused", null, null, null);
             } else if (host.playing) {
                 setMemberStatus(host.buffering ? "房主正在缓冲…" : "跟随房主播放中");
@@ -1005,13 +1210,29 @@ function wire() {
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
     wireHostSubtitleControls();
-    const changeMediaButton = $("btn-change-media");
-    const changeMediaInput = $("host-media-file");
-    if (changeMediaButton && changeMediaInput) {
-        changeMediaButton.addEventListener("click", () => changeMediaInput.click());
-        changeMediaInput.addEventListener("change", () => {
-            const file = changeMediaInput.files ? changeMediaInput.files[0] : null;
-            if (file) changeHostMedia(file);
+    const addMediaButton = $("btn-add-media");
+    const addMediaInput = $("host-media-files");
+    if (addMediaButton && addMediaInput) {
+        addMediaButton.addEventListener("click", () => addMediaInput.click());
+        addMediaInput.addEventListener("change", () => {
+            const files = Array.from(addMediaInput.files || []);
+            addMediaInput.value = "";
+            if (files.length) addHostFiles(files);
+        });
+    }
+    const autoplayBox = $("host-autoplay");
+    if (autoplayBox) {
+        try {
+            if (localStorage.getItem(AUTOPLAY_KEY) === "0") autoplayBox.checked = false;
+        } catch {
+            // ignore storage failures
+        }
+        autoplayBox.addEventListener("change", () => {
+            try {
+                localStorage.setItem(AUTOPLAY_KEY, autoplayBox.checked ? "1" : "0");
+            } catch {
+                // ignore storage failures
+            }
         });
     }
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
@@ -1108,7 +1329,7 @@ async function restoreFromUrl() {
 
     $("join-code").value = code;
     const stored = readMemberSession(code);
-    if (!stored || !stored.member_token || !stored.media_url) return false;
+    if (!stored || !stored.member_token) return false;
 
     try {
         const info = await request(`/hall/api/rooms/${encodeURIComponent(code)}`);
