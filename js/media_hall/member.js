@@ -49,6 +49,9 @@ export class MemberController {
         this.lastStats = null;
         this.keyHandler = null;
         this.mediaErrorHandler = null;
+        this.mediaPlayHandler = null;
+        this.mediaRetryCount = 0;
+        this.mediaRetryTimer = null;
     }
 
     start() {
@@ -68,6 +71,11 @@ export class MemberController {
         video.playsInline = true;
         this.mediaErrorHandler = () => this.handleMediaError();
         video.addEventListener("error", this.mediaErrorHandler);
+        // Once playback is healthy again, later errors get their own retries.
+        this.mediaPlayHandler = () => {
+            this.mediaRetryCount = 0;
+        };
+        video.addEventListener("playing", this.mediaPlayHandler);
 
         this.sync = new SyncController({
             video,
@@ -239,6 +247,9 @@ export class MemberController {
             this.clearMedia();
             return;
         }
+        this.mediaRetryCount = 0;
+        clearTimeout(this.mediaRetryTimer);
+        this.mediaRetryTimer = null;
         if (this.sync) this.sync.resetForMedia();
         try {
             video.pause();
@@ -251,6 +262,9 @@ export class MemberController {
     }
 
     clearMedia() {
+        this.mediaRetryCount = 0;
+        clearTimeout(this.mediaRetryTimer);
+        this.mediaRetryTimer = null;
         if (this.sync) this.sync.resetForMedia();
         try {
             this.video.pause();
@@ -350,6 +364,19 @@ export class MemberController {
         const video = this.video;
         const code = video.error ? video.error.code : 0;
         if (!video.getAttribute("src")) return;
+        if (this.ended || this.closedByUser) return;
+        // A switch can race the host's generation bump and fail one request;
+        // retry quietly a couple of times before telling the user.
+        if (this.mediaRetryCount < 2) {
+            this.mediaRetryCount += 1;
+            this.onOverlay("media", "视频加载失败，正在重试…", null, null);
+            clearTimeout(this.mediaRetryTimer);
+            this.mediaRetryTimer = setTimeout(
+                () => this.retrySource(),
+                600 * this.mediaRetryCount
+            );
+            return;
+        }
         this.onOverlay(
             "media",
             "视频加载失败，可能是房主离线或网络中断",
@@ -466,9 +493,15 @@ export class MemberController {
             this.sync.destroy();
             this.sync = null;
         }
+        clearTimeout(this.mediaRetryTimer);
+        this.mediaRetryTimer = null;
         if (this.mediaErrorHandler) {
             this.video.removeEventListener("error", this.mediaErrorHandler);
             this.mediaErrorHandler = null;
+        }
+        if (this.mediaPlayHandler) {
+            this.video.removeEventListener("playing", this.mediaPlayHandler);
+            this.mediaPlayHandler = null;
         }
         if (this.keyHandler) {
             document.removeEventListener("keydown", this.keyHandler, true);
