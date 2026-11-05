@@ -47,6 +47,16 @@
             .member-controls,
             .host-controls { opacity: 1 !important; }
         }
+        /* Narrow screens do not fit mute + slider + subtitle pickers + PiP, so
+           the slider gives way and the buttons keep their spacing. */
+        @media (max-width: 640px) {
+            .member-controls,
+            .host-controls { padding: 0.5rem 0.75rem; }
+            .member-controls > div,
+            .host-controls > div { gap: 0.4rem; }
+            #member-volume,
+            #host-volume { display: none; }
+        }
         .fade-in { animation: fade-in 0.35s ease-out both; }
         @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         input[type="file"]::file-selector-button {
