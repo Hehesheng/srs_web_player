@@ -570,6 +570,29 @@ function wire() {
     });
 }
 
+function installDebugHook() {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("debug")) return;
+    window.__hallDebug = () => {
+        const member = state.member && state.member.controller;
+        const sync = member && member.sync;
+        const video = $("member-video");
+        return {
+            role: state.role,
+            now: Date.now(),
+            rtt: sync ? sync.rtt : null,
+            offset: sync ? sync.offset : null,
+            serverNow: sync && sync.offsetValid ? sync.serverNow() : null,
+            host: sync ? sync.host : null,
+            D: sync ? sync.D : null,
+            target: sync ? sync.targetPosition() : null,
+            videoTime: video ? video.currentTime : null,
+            paused: video ? video.paused : null,
+            readyState: video ? video.readyState : null,
+        };
+    };
+}
+
 async function restoreFromUrl() {
     const params = new URLSearchParams(window.location.search);
     const code = (params.get("room") || "").trim().toUpperCase();
@@ -600,6 +623,7 @@ async function restoreFromUrl() {
 async function init() {
     wire();
     setKind("host_file");
+    installDebugHook();
 
     try {
         const name = localStorage.getItem("hall_member_name");
