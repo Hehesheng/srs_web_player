@@ -15,6 +15,7 @@ const FATAL_CLOSE_CODES = new Set([4000, 4001, 4401, 4403, 4404, 4410, 4503]);
 const MAX_RECONNECT_ATTEMPTS = 8;
 
 let file = null;
+let fileMediaId = null;
 let wsUrl = "";
 let token = "";
 let ws = null;
@@ -33,6 +34,7 @@ self.onmessage = (event) => {
     switch (message.type) {
         case "init":
             file = message.file;
+            fileMediaId = message.mediaId || null;
             wsUrl = message.wsUrl;
             token = message.token;
             connect();
@@ -54,7 +56,9 @@ self.onmessage = (event) => {
             break;
         case "file":
             file = message.file;
+            fileMediaId = message.mediaId || null;
             cancelled.clear();
+            announceMedia();
             break;
         case "close":
             shutdown();
@@ -85,7 +89,12 @@ function connect() {
     ws = socket;
 
     socket.onopen = () => {
-        sendRaw({ type: "auth", role: "host", token });
+        sendRaw({
+            type: "auth",
+            role: "host",
+            token,
+            capabilities: ["media_ready"],
+        });
         startFlow();
     };
 
@@ -104,6 +113,9 @@ function connect() {
                     members: message.members,
                     host: message.host,
                 });
+                // The server gates reads until it knows which media we hold,
+                // which also covers reconnects.
+                announceMedia();
                 break;
             case "read":
                 enqueueRead(message);
@@ -177,6 +189,12 @@ function sendRaw(payload) {
 function sendControl(type, payload) {
     if (!payload || typeof payload !== "object") return;
     sendRaw({ type, ...payload });
+}
+
+function announceMedia() {
+    // Without a local file there is nothing to serve, so never claim readiness
+    // for it.  Ignored while the socket is closed; auth_ok announces again.
+    sendRaw({ type: "media_ready", media_id: file ? fileMediaId : null });
 }
 
 function startFlow() {

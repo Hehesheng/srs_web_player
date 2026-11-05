@@ -538,7 +538,7 @@ function switchHostToMedia(media, mediaUrl) {
         toast("这个文件的本地副本已丢失，请重新添加该文件", "error");
         return;
     }
-    host.switchFile(file);
+    host.switchFile(file, media.media_id);
 }
 
 async function addHostFiles(files) {

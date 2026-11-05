@@ -113,6 +113,7 @@ export class HostController {
         this.worker.postMessage({
             type: "init",
             file: this.file,
+            mediaId: this.session.media ? this.session.media.media_id : null,
             wsUrl: websocketUrl(`/hall/ws/${this.session.room_id}`),
             token: this.session.host_token,
         });
@@ -184,9 +185,9 @@ export class HostController {
 
     // -- media swap ----------------------------------------------------
     /** Swap the locally played file while the room and its socket stay alive. */
-    switchFile(file) {
+    switchFile(file, mediaId = null) {
         this.file = file;
-        if (this.worker) this.worker.postMessage({ type: "file", file });
+        if (this.worker) this.worker.postMessage({ type: "file", file, mediaId });
 
         const video = this.video;
         const previousUrl = this.objectUrl;
@@ -209,7 +210,7 @@ export class HostController {
     /** Switch to a server-relayed URL item (url rooms and url playlist items). */
     switchUrl(url) {
         this.file = null;
-        if (this.worker) this.worker.postMessage({ type: "file", file: null });
+        if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
 
         const video = this.video;
         const previousUrl = this.objectUrl;
@@ -233,7 +234,7 @@ export class HostController {
     /** Drop the current media when the playlist becomes empty. */
     clearMedia() {
         this.file = null;
-        if (this.worker) this.worker.postMessage({ type: "file", file: null });
+        if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
 
         const video = this.video;
         const previousUrl = this.objectUrl;
