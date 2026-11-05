@@ -38,6 +38,7 @@ self.onmessage = (event) => {
             break;
         case "state":
         case "seek":
+        case "subtitle_select":
             sendControl(message.type, message.payload);
             break;
         case "end":

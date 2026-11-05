@@ -9,12 +9,13 @@ const HEARTBEAT_PLAYING_MS = 250;
 const HEARTBEAT_PAUSED_MS = 1000;
 
 export class HostController {
-    constructor({ video, file, session, onStatus, onMembers, onError, onClosed, onMetrics, onProgress }) {
+    constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress }) {
         this.video = video;
         this.file = file;
         this.session = session;
         this.onStatus = onStatus || (() => {});
         this.onMembers = onMembers || (() => {});
+        this.onRoomState = onRoomState || (() => {});
         this.onError = onError || (() => {});
         this.onClosed = onClosed || (() => {});
         this.onMetrics = onMetrics || (() => {});
@@ -162,6 +163,10 @@ export class HostController {
         this.worker.postMessage(payload);
     }
 
+    selectSubtitle(subtitleId, visible = true) {
+        this.sendRaw({ type: "subtitle_select", payload: { subtitle_id: subtitleId, visible } });
+    }
+
     handleWorkerMessage(message) {
         if (!message || typeof message !== "object") return;
         switch (message.type) {
@@ -171,6 +176,7 @@ export class HostController {
             case "auth_ok":
                 this.onStatus("connected");
                 if (Array.isArray(message.members)) this.onMembers(message.members);
+                if (message.room) this.onRoomState(message.room);
                 break;
             case "reconnecting":
                 this.onStatus("reconnecting", message.attempt);
@@ -180,8 +186,9 @@ export class HostController {
                 break;
             case "room":
                 if (Array.isArray(message.members)) this.onMembers(message.members);
-                if (message.data && message.data.type === "room_state" && message.data.ended) {
-                    this.onStatus("ended");
+                if (message.data && message.data.type === "room_state") {
+                    this.onRoomState(message.data);
+                    if (message.data.ended) this.onStatus("ended");
                 }
                 break;
             case "error":

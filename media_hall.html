@@ -22,6 +22,10 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         #host-video, #member-video { background: #000; }
+        #host-video::cue { font-size: 110%; background: rgba(0, 0, 0, 0.55); }
+        #member-video.cue-small::cue { font-size: 90%; background: rgba(0, 0, 0, 0.55); }
+        #member-video.cue-medium::cue { font-size: 120%; background: rgba(0, 0, 0, 0.55); }
+        #member-video.cue-large::cue { font-size: 160%; background: rgba(0, 0, 0, 0.55); }
         .member-shell:fullscreen { background: #000; padding: 0; }
         .member-shell:fullscreen video { height: 100vh; width: 100vw; object-fit: contain; }
         @media (hover: none) {
@@ -96,6 +100,13 @@
                         <input id="create-url" placeholder="https://example.com/movie.mp4"
                             class="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm outline-none transition focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20">
                         <p class="mt-2 text-[11px] text-slate-500">仅支持 http/https；服务端会拒绝私网地址。</p>
+                    </div>
+
+                    <div class="mt-4">
+                        <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">字幕（可选）</label>
+                        <input id="create-subtitle" type="file" accept=".vtt,.srt,text/vtt,application/x-subrip"
+                            class="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-3 text-sm text-slate-300">
+                        <p class="mt-1 text-[11px] text-slate-500">支持 .vtt / .srt，最大 10MB；上传失败不影响房间创建。</p>
                     </div>
 
                     <button id="btn-create"
@@ -177,6 +188,28 @@
                     </ul>
                 </div>
             </div>
+
+            <div class="mt-5 glass-card rounded-2xl p-5">
+                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">字幕</h2>
+                        <p class="mt-1 text-[11px] text-slate-500">上传 .srt / .vtt；成员默认跟随你选择的字幕轨。</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="host-subtitle-select"
+                            class="rounded-xl border border-slate-700/60 bg-slate-900/80 px-3 py-2 text-xs text-slate-200 outline-none transition focus:border-sky-500/60">
+                            <option value="">关闭字幕</option>
+                        </select>
+                        <label class="flex items-center gap-2 rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                            <input id="host-subtitle-visible" type="checkbox" checked class="accent-sky-400">
+                            显示
+                        </label>
+                        <button id="btn-upload-subtitle"
+                            class="rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">上传字幕</button>
+                        <input id="host-subtitle-file" type="file" accept=".vtt,.srt,text/vtt,application/x-subrip" class="hidden">
+                    </div>
+                </div>
+            </div>
         </section>
 
         <!-- 成员视图 -->
@@ -210,6 +243,12 @@
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                         </button>
                         <input id="member-volume" type="range" min="0" max="100" value="100" class="w-24">
+                        <button id="btn-member-subtitles" class="rounded-lg bg-white/10 px-2.5 py-2 text-[11px] font-bold text-slate-200 backdrop-blur transition hover:bg-white/20 disabled:opacity-40" title="本地显示/隐藏字幕，不影响其他人">CC</button>
+                        <select id="member-subtitle-size" class="rounded-lg border-0 bg-white/10 px-2 py-2 text-[11px] text-slate-200 backdrop-blur outline-none" title="字幕字号">
+                            <option value="small">小</option>
+                            <option value="medium" selected>中</option>
+                            <option value="large">大</option>
+                        </select>
                     </div>
                     <button id="btn-fullscreen" class="pointer-events-auto rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
