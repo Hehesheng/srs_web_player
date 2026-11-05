@@ -34,8 +34,12 @@ let hostRoomStateTs = 0;
 let memberRoomState = null;
 let memberRoomStateTs = 0;
 let memberSubtitlesVisible = true;
-let memberSubtitleTrackId = null;
+// The track a member picked for themselves; null means "follow the room".
+// It never leaves this browser, so each viewer can choose independently.
+let memberSubtitleChoice = null;
+let memberSubtitleHostId = null;
 let memberSubtitleHostVisible = true;
+let memberSubtitleMenuSignature = "";
 
 const state = {
     kind: "host_file",
@@ -133,8 +137,11 @@ function validateSubtitleFile(file) {
     return null;
 }
 
-async function uploadSubtitle(session, file) {
-    const params = new URLSearchParams({ name: file.name, lang: subtitleLang(file.name) });
+async function uploadSubtitle(session, file, options = {}) {
+    const name = options.name || file.name || "subtitles.vtt";
+    const params = new URLSearchParams({ name, lang: options.lang || subtitleLang(name) });
+    // Tracks read out of a playlist item are only offered while it plays.
+    if (options.mediaId) params.set("media_id", options.mediaId);
     let response;
     try {
         response = await fetch(
@@ -201,6 +208,42 @@ function findActiveSubtitle(roomState) {
     const activeId = (roomState && roomState.active_subtitle_id) || null;
     if (!activeId) return null;
     return subtitleListOf(roomState).find((item) => item.subtitle_id === activeId) || null;
+}
+
+// -- embedded subtitle tracks ----------------------------------------
+// Browsers keep container subtitle tracks to themselves, so the host reads
+// them once and uploads them as ordinary room subtitles for that item.
+const embeddedSubsScanned = new Set();
+
+async function extractEmbeddedSubtitles(session, mediaId, media, source) {
+    const lib = window.HallEmbeddedSubs;
+    if (!lib || !session || !session.host_token || !mediaId || !media) return;
+    if (!lib.isMp4Media(media)) return;
+    if (embeddedSubsScanned.has(mediaId)) return;
+    embeddedSubsScanned.add(mediaId);
+    let tracks = [];
+    try {
+        tracks = await lib.extractSubtitles(source);
+    } catch (error) {
+        console.debug("内嵌字幕解析失败", error);
+        return;
+    }
+    if (!tracks.length) return;
+    let added = 0;
+    for (const item of tracks) {
+        try {
+            const blob = new Blob([item.vtt], { type: "text/vtt;charset=utf-8" });
+            await uploadSubtitle(session, blob, {
+                name: item.name,
+                lang: item.lang,
+                mediaId,
+            });
+            added += 1;
+        } catch (error) {
+            console.debug("内嵌字幕上传失败", error);
+        }
+    }
+    if (added) toast(`已识别 ${added} 条内嵌字幕`, "success");
 }
 
 function setButtonsBusy(button, busy, label) {
@@ -303,6 +346,16 @@ async function createRoom() {
         startHost(session, files[0] || null, data.room);
         if (files.length > 1) addHostFiles(files.slice(1));
         if (subtitleFile) uploadInitialSubtitle(session, subtitleFile);
+        if (data.media_id) {
+            if (files[0]) {
+                extractEmbeddedSubtitles(session, data.media_id, files[0], { file: files[0] });
+            } else if (data.media && data.media.kind === "url") {
+                extractEmbeddedSubtitles(session, data.media_id, data.media, {
+                    url: session.media_url,
+                    size: data.media.size,
+                });
+            }
+        }
     } catch (error) {
         showError("create-error", error.message || "创建房间失败");
     } finally {
@@ -530,7 +583,16 @@ function switchHostToMedia(media, mediaUrl) {
         return;
     }
     if (media.kind === "url") {
-        host.switchUrl(mediaUrl || state.room.media_url);
+        const url = mediaUrl || state.room.media_url;
+        host.switchUrl(url);
+        // A remote file can only be read through the relay while it plays, so
+        // its subtitle tracks are picked up here rather than when it was added.
+        if (url && media.range_supported !== false) {
+            extractEmbeddedSubtitles(state.room, media.media_id, media, {
+                url,
+                size: media.size,
+            });
+        }
         return;
     }
     const file = state.playlistFiles.get(media.media_id);
@@ -569,6 +631,7 @@ async function addHostFiles(files) {
             session.media_url = data.media_url;
             persistHostSession();
             applyHostPlaylistPayload(data);
+            extractEmbeddedSubtitles(session, data.media_id, file, { file });
             if (data.active) {
                 switchHostToMedia(data.media, data.media_url);
                 state.host.play();
@@ -1062,29 +1125,149 @@ function setMemberSubtitleSize(size) {
 
 function updateMemberSubtitleButton(subtitle) {
     const button = $("btn-member-subtitles");
-    if (!button) return;
-    button.disabled = !subtitle;
-    button.classList.toggle("text-sky-300", Boolean(subtitle) && memberSubtitlesVisible);
-    button.setAttribute("aria-pressed", memberSubtitlesVisible ? "true" : "false");
-    button.title = !subtitle
-        ? "当前没有字幕"
-        : memberSubtitlesVisible
-          ? "隐藏字幕（仅本机生效）"
-          : "显示字幕（仅本机生效）";
+    const menuButton = $("btn-member-subtitle-menu");
+    const override = Boolean(memberSubtitleChoice);
+    if (button) {
+        button.disabled = !subtitle;
+        button.classList.toggle("text-sky-300", Boolean(subtitle) && memberSubtitlesVisible);
+        button.setAttribute("aria-pressed", memberSubtitlesVisible ? "true" : "false");
+        button.title = !subtitle
+            ? "当前没有字幕"
+            : memberSubtitlesVisible
+              ? "隐藏字幕（仅本机生效）"
+              : "显示字幕（仅本机生效）";
+    }
+    if (menuButton) {
+        menuButton.disabled = false;
+        menuButton.classList.toggle("text-sky-300", override);
+        menuButton.title = override ? "正在使用本机选择的字幕" : "选择字幕（仅本机生效）";
+    }
+}
+
+// The subtitle this viewer is actually seeing: their own pick, or the room's.
+function memberEffectiveSubtitle(roomState) {
+    const options = subtitleListOf(roomState);
+    if (memberSubtitleChoice) {
+        return options.find((item) => item.subtitle_id === memberSubtitleChoice) || null;
+    }
+    const activeId = (roomState && roomState.active_subtitle_id) || null;
+    return options.find((item) => item.subtitle_id === activeId) || null;
+}
+
+function closeMemberSubtitleMenu() {
+    const menu = $("member-subtitle-menu");
+    const button = $("btn-member-subtitle-menu");
+    if (menu) menu.classList.add("hidden");
+    if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function toggleMemberSubtitleMenu() {
+    const menu = $("member-subtitle-menu");
+    const button = $("btn-member-subtitle-menu");
+    if (!menu || !button) return;
+    const open = menu.classList.toggle("hidden") === false;
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) renderMemberSubtitleMenu(memberRoomState, memberEffectiveSubtitle(memberRoomState), true);
+}
+
+function chooseMemberSubtitle(subtitleId) {
+    memberSubtitleChoice = subtitleId || null;
+    if (!memberSubtitleChoice) {
+        // Back to following the room: pick its choice back up as-is.
+        memberSubtitlesVisible = memberSubtitleHostVisible;
+    } else {
+        memberSubtitlesVisible = true;
+    }
+    closeMemberSubtitleMenu();
+    memberSubtitleMenuSignature = "";
+    applyMemberSubtitles(memberRoomState);
+}
+
+function memberSubtitleMenuOption(selected, label, note, onPick) {
+    const item = document.createElement("button");
+    item.className =
+        "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] transition hover:bg-white/10 " +
+        (selected ? "text-sky-300" : "text-slate-300");
+    const name = document.createElement("span");
+    name.className = "truncate";
+    name.textContent = label;
+    item.appendChild(name);
+    if (note) {
+        const badge = document.createElement("span");
+        badge.className = "shrink-0 rounded bg-white/10 px-1 py-0.5 text-[9px] text-slate-400";
+        badge.textContent = note;
+        item.appendChild(badge);
+    }
+    item.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onPick();
+    });
+    return item;
+}
+
+function renderMemberSubtitleMenu(roomState, effective, force) {
+    const menu = $("member-subtitle-menu");
+    if (!menu) return;
+    const options = subtitleListOf(roomState);
+    const hostActiveId = (roomState && roomState.active_subtitle_id) || null;
+    const signature = [
+        options.map((item) => item.subtitle_id).join(","),
+        memberSubtitleChoice || "",
+        hostActiveId || "",
+        effective ? effective.subtitle_id : "",
+    ].join("|");
+    if (!force && signature === memberSubtitleMenuSignature) return;
+    memberSubtitleMenuSignature = signature;
+
+    menu.textContent = "";
+    if (!options.length) {
+        const empty = document.createElement("div");
+        empty.className = "px-2.5 py-1.5 text-[11px] text-slate-500";
+        empty.textContent = "当前视频没有可选字幕";
+        menu.appendChild(empty);
+        return;
+    }
+    menu.appendChild(
+        memberSubtitleMenuOption(
+            !memberSubtitleChoice,
+            "跟随房主",
+            null,
+            () => chooseMemberSubtitle(null)
+        )
+    );
+    for (const item of options) {
+        const selected = Boolean(effective && effective.subtitle_id === item.subtitle_id);
+        const label = item.name || item.lang || "字幕";
+        const note = item.subtitle_id === hostActiveId ? "房主" : null;
+        menu.appendChild(
+            memberSubtitleMenuOption(selected, label, note, () =>
+                chooseMemberSubtitle(item.subtitle_id)
+            )
+        );
+    }
 }
 
 function applyMemberSubtitles(roomState) {
     const video = $("member-video");
     if (!roomState || typeof roomState !== "object") return;
-    const activeId = roomState.active_subtitle_id || null;
+    const options = subtitleListOf(roomState);
+    const hostActiveId = roomState.active_subtitle_id || null;
     const hostVisible = roomState.active_subtitle_visible !== false;
-    if (activeId !== memberSubtitleTrackId || hostVisible !== memberSubtitleHostVisible) {
-        memberSubtitleTrackId = activeId;
+    if (
+        memberSubtitleChoice &&
+        !options.some((item) => item.subtitle_id === memberSubtitleChoice)
+    ) {
+        // That track is gone: the playlist moved on or the host removed it.
+        memberSubtitleChoice = null;
+        memberSubtitleHostId = undefined; // force a visibility resync below
+    }
+    if (hostActiveId !== memberSubtitleHostId || hostVisible !== memberSubtitleHostVisible) {
+        if (!memberSubtitleChoice) memberSubtitlesVisible = hostVisible;
+        memberSubtitleHostId = hostActiveId;
         memberSubtitleHostVisible = hostVisible;
-        memberSubtitlesVisible = hostVisible;
     }
 
-    const subtitle = findActiveSubtitle(roomState);
+    const subtitle = memberEffectiveSubtitle(roomState);
     if (!subtitle) {
         removeSubtitleTracks(video);
     } else {
@@ -1096,6 +1279,7 @@ function applyMemberSubtitles(roomState) {
         }
     }
     updateMemberSubtitleButton(subtitle);
+    renderMemberSubtitleMenu(roomState, subtitle, false);
 }
 
 function correctMemberNow() {
@@ -1108,7 +1292,7 @@ function correctMemberNow() {
 }
 
 function toggleMemberSubtitles() {
-    if (!memberRoomState || !findActiveSubtitle(memberRoomState)) return;
+    if (!memberRoomState || !memberEffectiveSubtitle(memberRoomState)) return;
     memberSubtitlesVisible = !memberSubtitlesVisible;
     setSubtitleTrackMode($("member-video"), memberSubtitlesVisible);
     applyMemberSubtitles(memberRoomState);
@@ -1124,8 +1308,10 @@ function startMember(session, room) {
     overlayEntries.clear();
     memberRoomState = room || null;
     memberRoomStateTs = 0;
-    memberSubtitleTrackId = null;
+    memberSubtitleChoice = null;
+    memberSubtitleHostId = null;
     memberSubtitleHostVisible = true;
+    memberSubtitleMenuSignature = "";
     memberSubtitlesVisible = true;
     removeSubtitleTracks($("member-video"));
     setMemberSubtitleSize(storedMemberSubtitleSize());
@@ -1323,6 +1509,12 @@ function wire() {
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
     $("btn-member-subtitles").addEventListener("click", toggleMemberSubtitles);
+    $("btn-member-subtitle-menu").addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleMemberSubtitleMenu();
+    });
+    $("member-subtitle-menu").addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => closeMemberSubtitleMenu());
     $("member-subtitle-size").addEventListener("change", (event) => {
         setMemberSubtitleSize(event.target.value);
     });
