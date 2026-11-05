@@ -23,6 +23,7 @@ let reconnectTimer = null;
 let reconnectAttempts = 0;
 let flowTimer = null;
 let activeReads = 0;
+let suspended = false;
 const pendingReads = [];
 const cancelled = new Set();
 
@@ -43,6 +44,17 @@ self.onmessage = (event) => {
             break;
         case "end":
             sendControl("end", {});
+            break;
+        case "suspend":
+            suspended = true;
+            break;
+        case "resume":
+            suspended = false;
+            pump();
+            break;
+        case "file":
+            file = message.file;
+            cancelled.clear();
             break;
         case "close":
             shutdown();
@@ -188,6 +200,7 @@ function enqueueRead(request) {
 }
 
 function pump() {
+    if (suspended) return;
     while (activeReads < MAX_PARALLEL_READS && pendingReads.length) {
         const request = pendingReads.shift();
         activeReads += 1;

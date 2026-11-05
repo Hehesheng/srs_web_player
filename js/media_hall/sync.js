@@ -220,6 +220,22 @@ export class SyncController {
         return true;
     }
 
+    /** Forget the old media's timeline after the host swaps the source. */
+    resetForMedia() {
+        this.host = null;
+        this.pendingInitialSeek = true;
+        this.bigDriftSince = 0;
+        this.emaDrift = 0;
+        this.allowSeek = false;
+        this.lastHardSeek = -1e9;
+        this.lastAnySeek = -1e9;
+        this.hardSeeks = [];
+        this.playPromise = null;
+        clearTimeout(this.allowSeekTimer);
+        this.video.playbackRate = 1;
+        this.report();
+    }
+
     hardSeek(target, force = false, urgent = false) {
         const now = performance.now();
         if (!urgent) {

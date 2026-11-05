@@ -325,6 +325,7 @@ async function joinRoom() {
             room_id: data.room_id,
             room_code: data.room_code,
             media_url: data.media_url,
+            media: data.media,
             name,
             room_name: (data.room && data.room.name) || "",
         };
@@ -550,6 +551,58 @@ function wireHostSubtitleControls() {
     if (uploadButton && uploadInput) {
         uploadButton.addEventListener("click", () => uploadInput.click());
         uploadInput.addEventListener("change", uploadHostSubtitleFile);
+    }
+}
+
+async function changeHostMedia(file) {
+    const session = state.room;
+    if (!session || !state.host || !file) return;
+    if (!isLikelyVideo(file)) {
+        toast("请选择浏览器可播放的视频文件（mp4 / webm / mov 等）", "error");
+        return;
+    }
+    if (file.size <= 0) {
+        toast("文件为空，无法切换", "error");
+        return;
+    }
+    if (file.size > MAX_HOST_FILE_BYTES) {
+        toast("文件超过 64GB，暂不支持", "error");
+        return;
+    }
+    if (!window.confirm("切换视频后房间不会解散，所有成员会从头开始播放。确定切换吗？")) return;
+
+    const host = state.host;
+    const button = $("btn-change-media");
+    setButtonsBusy(button, true, "切换中…");
+    host.suspendMedia();
+    try {
+        const data = await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/media`, {
+            method: "POST",
+            headers: { "X-Host-Token": session.host_token },
+            body: {
+                kind: "host_file",
+                name: file.name,
+                size: file.size,
+                mime: file.type || "application/octet-stream",
+            },
+        });
+        session.media = data.media;
+        session.media_url = data.media_url;
+        try {
+            sessionStorage.setItem(HOST_KEY, JSON.stringify(session));
+        } catch {
+            // ignore storage failures
+        }
+        $("host-media-name").textContent = `${data.media.name} · ${fmtBytes(data.media.size)}`;
+        host.switchFile(file);
+        toast(`已切换到「${file.name}」`, "success");
+    } catch (error) {
+        toast(error.message || "切换视频失败", "error");
+    } finally {
+        host.resumeMedia();
+        setButtonsBusy(button, false);
+        const input = $("host-media-file");
+        if (input) input.value = "";
     }
 }
 
@@ -891,6 +944,12 @@ function startMember(session, room) {
                 // ignore
             }
         },
+        onMediaChanged: (media) => {
+            const current = state.member && state.member.session;
+            if (current) saveMemberSession(current);
+            $("member-status").textContent = "房主已切换视频，等待播放";
+            toast(`房主已切换视频：${media.name || "新视频"}`, "info");
+        },
     });
     state.member.controller = controller;
     controller.start();
@@ -919,6 +978,15 @@ function wire() {
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
     wireHostSubtitleControls();
+    const changeMediaButton = $("btn-change-media");
+    const changeMediaInput = $("host-media-file");
+    if (changeMediaButton && changeMediaInput) {
+        changeMediaButton.addEventListener("click", () => changeMediaInput.click());
+        changeMediaInput.addEventListener("change", () => {
+            const file = changeMediaInput.files ? changeMediaInput.files[0] : null;
+            if (file) changeHostMedia(file);
+        });
+    }
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
     $("btn-member-subtitles").addEventListener("click", toggleMemberSubtitles);

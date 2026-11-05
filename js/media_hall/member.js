@@ -21,7 +21,7 @@ const FATAL_CLOSE = new Map([
 ]);
 
 export class MemberController {
-    constructor({ video, session, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid }) {
+    constructor({ video, session, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid, onMediaChanged }) {
         this.video = video;
         this.session = session;
         this.onOverlay = onOverlay || (() => {});
@@ -34,6 +34,8 @@ export class MemberController {
         this.onStats = onStats || (() => {});
         this.onEnded = onEnded || (() => {});
         this.onTokenInvalid = onTokenInvalid || (() => {});
+        this.onMediaChanged = onMediaChanged || (() => {});
+        this.mediaId = session && session.media && session.media.media_id ? session.media.media_id : null;
 
         this.ws = null;
         this.sync = null;
@@ -184,6 +186,7 @@ export class MemberController {
     handleRoom(room, initial) {
         if (!room) return;
         if (room.name) this.session.room_name = room.name;
+        this.applyMedia(room);
         this.onRoomState(room, initial);
         if (Array.isArray(room.members)) this.onMembers(room.members);
         if (room.ended) {
@@ -198,6 +201,31 @@ export class MemberController {
         } else {
             this.onOverlay("offline", null, null, null);
         }
+    }
+
+    applyMedia(room) {
+        const media = room.media;
+        if (!media || !media.media_id) return;
+        const previousId = this.mediaId;
+        this.mediaId = media.media_id;
+        if (room.media_url) this.session.media_url = room.media_url;
+        this.session.media = media;
+        if (previousId === null || previousId === media.media_id) return;
+        this.switchMedia();
+        this.onMediaChanged(media);
+    }
+
+    switchMedia() {
+        const video = this.video;
+        if (this.sync) this.sync.resetForMedia();
+        try {
+            video.pause();
+        } catch {
+            // ignore
+        }
+        video.src = this.session.media_url;
+        video.load();
+        this.onOverlay("media", null, null, null);
     }
 
     handleHostEvent(payload, event) {

@@ -167,6 +167,38 @@ export class HostController {
         this.sendRaw({ type: "subtitle_select", payload: { subtitle_id: subtitleId, visible } });
     }
 
+    // -- media swap ----------------------------------------------------
+    suspendMedia() {
+        this.sendRaw({ type: "suspend" });
+    }
+
+    resumeMedia() {
+        this.sendRaw({ type: "resume" });
+    }
+
+    /** Swap the locally played file while the room and its socket stay alive. */
+    switchFile(file) {
+        this.file = file;
+        if (this.worker) this.worker.postMessage({ type: "file", file });
+
+        const video = this.video;
+        const previousUrl = this.objectUrl;
+        this.objectUrl = URL.createObjectURL(file);
+        this.ready = false;
+        this.waiting = false;
+        this.mediaEnded = false;
+        this.seq = (this.seq + 1) >>> 0;
+        try {
+            video.pause();
+        } catch {
+            // ignore
+        }
+        video.src = this.objectUrl;
+        video.load();
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+    }
+
     handleWorkerMessage(message) {
         if (!message || typeof message !== "object") return;
         switch (message.type) {

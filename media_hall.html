@@ -156,7 +156,12 @@
                         <h1 id="host-room-name" class="text-xl font-bold tracking-tight">媒体播放厅</h1>
                         <span id="host-host-badge" class="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-sky-300">HOST</span>
                     </div>
-                    <p id="host-media-name" class="mt-1 text-xs text-slate-500">--</p>
+                    <div class="mt-1 flex flex-wrap items-center gap-2">
+                        <p id="host-media-name" class="text-xs text-slate-500">--</p>
+                        <button id="btn-change-media" type="button"
+                            class="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">更换视频</button>
+                        <input id="host-media-file" type="file" accept="video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.m4v,.mov" class="hidden">
+                    </div>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
                     <div class="flex items-center gap-2 rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2">
