@@ -4,18 +4,21 @@
  * The host publishes a server-timestamped timeline.  Every member estimates its
  * clock offset with NTP-style pings, then rides a small PLL:
  *
- *   - |drift| < 0.2s   : play at host rate
- *   - 0.2s .. 3s       : gently correct within +/-10% of host rate
+ *   - |drift| < 0.15s  : play at host rate
+ *   - 0.15s .. 3s      : gently correct within +/-10% of host rate
  *   - 3s .. 8s         : hard seek after the drift persists for 1s
  *   - > 8s             : hard seek immediately
  *
  * Members always stay D seconds behind the host, where D grows when the local
- * network stalls and shrinks slowly during long stable periods.
+ * network stalls and, once 60s have passed without a stall, decays every 30s
+ * (by 0.2s while it is still well above DMin, by 0.1s once it is close).
  */
 
 const MIN_SEEK_INTERVAL = 1500;
 const CORRECTION_COOLDOWN = 8000;
-const DRIFT_TOLERANCE = 0.2;
+const DRIFT_TOLERANCE = 0.15;
+const D_DECAY_INTERVAL = 30000;
+const D_DECAY_STALL_GUARD = 60000;
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const median = (values) => {
@@ -299,8 +302,9 @@ export class SyncController {
             this.video.pause();
         }
 
-        if (now - this.lastDAdjust > 120000 && now - this.lastStallAt > 120000) {
-            this.D = clamp(this.D - 0.1, this.DMin, this.DMax);
+        if (now - this.lastDAdjust > D_DECAY_INTERVAL && now - this.lastStallAt > D_DECAY_STALL_GUARD) {
+            const step = this.D - this.DMin > 0.6 ? 0.2 : 0.1;
+            this.D = clamp(this.D - step, this.DMin, this.DMax);
             this.lastDAdjust = now;
         }
 
