@@ -45,7 +45,7 @@ const state = {
 
 const overlayEntries = new Map();
 let roomListTimer = null;
-const OVERLAY_PRIORITY = ["ended", "fatal", "offline", "blocked", "connecting", "media", "buffering"];
+const OVERLAY_PRIORITY = ["ended", "fatal", "offline", "blocked", "connecting", "media", "paused", "buffering"];
 let overlayAction = null;
 
 // -- helpers ---------------------------------------------------------
@@ -723,6 +723,14 @@ async function endCurrentRoom() {
 }
 
 // -- member ----------------------------------------------------------
+function setMemberStatus(text, emphasize = false) {
+    const el = $("member-status");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = emphasize ? "#fbbf24" : "";
+    el.style.fontWeight = emphasize ? "600" : "";
+}
+
 function setMemberOverlay(key, text, actionLabel, action) {
     if (!text) overlayEntries.delete(key);
     else overlayEntries.set(key, { text, actionLabel, action });
@@ -751,10 +759,16 @@ function renderMemberOverlay() {
     }
     overlay.classList.remove("hidden");
     const buffering = chosenKey === "buffering";
+    const paused = chosenKey === "paused";
     overlay.classList.toggle("bg-slate-950/30", buffering);
-    overlay.classList.toggle("bg-slate-950/85", !buffering);
-    overlay.classList.toggle("backdrop-blur-sm", !buffering);
+    overlay.classList.toggle("bg-slate-950/40", paused);
+    overlay.classList.toggle("bg-slate-950/85", !buffering && !paused);
+    overlay.classList.toggle("backdrop-blur-sm", !buffering && !paused);
     textEl.textContent = entry.text;
+    textEl.style.fontSize = paused ? "1.25rem" : "";
+    textEl.style.fontWeight = paused ? "600" : "";
+    textEl.style.color = paused ? "#f8fafc" : "";
+    textEl.style.letterSpacing = paused ? "0.08em" : "";
     if (entry.actionLabel && typeof entry.action === "function") {
         button.textContent = entry.actionLabel;
         button.classList.remove("hidden");
@@ -877,7 +891,7 @@ function startMember(session, room) {
     $("member-d").textContent = "0.5s";
     $("member-rate").textContent = "1.00x";
     setStatusBadge("member-host-badge", "连接中", "muted");
-    $("member-status").textContent = "正在连接房间…";
+    setMemberStatus("正在连接房间…");
     if (room) {
         updateMemberMembers(room.members || []);
         if (room.host && room.host.online !== false) {
@@ -895,7 +909,12 @@ function startMember(session, room) {
         onRoomState: (roomState) => {
             if (roomState && roomState.name) $("member-room-name").textContent = roomState.name;
             const hostOnline = roomState && roomState.host && roomState.host.online !== false;
-            setStatusBadge("member-host-badge", hostOnline ? "房主在线" : "房主离线", hostOnline ? "good" : "bad");
+            const hostPaused = hostOnline && roomState.host && !roomState.host.playing;
+            setStatusBadge(
+                "member-host-badge",
+                hostOnline ? (hostPaused ? "房主已暂停" : "房主在线") : "房主离线",
+                hostOnline ? (hostPaused ? "warn" : "good") : "bad"
+            );
             const ts = Number(roomState && roomState.server_ts) || 0;
             if (ts && ts < memberRoomStateTs) return;
             if (ts) memberRoomStateTs = ts;
@@ -904,26 +923,34 @@ function startMember(session, room) {
         },
         onHostState: (host) => {
             const online = host.online !== false;
-            setStatusBadge("member-host-badge", online ? "房主在线" : "房主离线", online ? "good" : "bad");
+            const paused = online && !host.playing;
+            setStatusBadge(
+                "member-host-badge",
+                online ? (paused ? "房主已暂停" : "房主在线") : "房主离线",
+                online ? (paused ? "warn" : "good") : "bad"
+            );
             if (!online) {
-                $("member-status").textContent = "房主已离线，等待重新连接…";
+                setMemberStatus("房主已离线，等待重新连接…");
+                setMemberOverlay("paused", null, null, null);
             } else if (host.playing) {
-                $("member-status").textContent = host.buffering ? "房主正在缓冲…" : "跟随房主播放中";
+                setMemberStatus(host.buffering ? "房主正在缓冲…" : "跟随房主播放中");
+                setMemberOverlay("paused", null, null, null);
             } else {
-                $("member-status").textContent = "房主已暂停";
+                setMemberStatus("房主已暂停", true);
+                setMemberOverlay("paused", "房主已暂停", null, null);
             }
         },
         onMembers: (members) => updateMemberMembers(members),
         onConnected: () => {
-            $("member-status").textContent = "已连接，正在同步…";
+            setMemberStatus("已连接，正在同步…");
         },
         onDisconnected: (message, fatal) => {
             if (fatal) {
                 setStatusBadge("member-host-badge", "连接断开", "bad");
-                $("member-status").textContent = message || "连接已断开";
+                setMemberStatus(message || "连接已断开");
             } else {
                 setStatusBadge("member-host-badge", "重连中", "warn");
-                $("member-status").textContent = message || "连接中断，正在重连…";
+                setMemberStatus(message || "连接中断，正在重连…");
             }
         },
         onError: (message) => toast(message, "error"),
@@ -935,7 +962,7 @@ function startMember(session, room) {
         },
         onEnded: () => {
             setStatusBadge("member-host-badge", "已结束", "muted");
-            $("member-status").textContent = "房间已结束";
+            setMemberStatus("房间已结束");
         },
         onTokenInvalid: () => {
             try {
@@ -947,7 +974,7 @@ function startMember(session, room) {
         onMediaChanged: (media) => {
             const current = state.member && state.member.session;
             if (current) saveMemberSession(current);
-            $("member-status").textContent = "房主已切换视频，等待播放";
+            setMemberStatus("房主已切换视频，等待播放");
             toast(`房主已切换视频：${media.name || "新视频"}`, "info");
         },
     });
