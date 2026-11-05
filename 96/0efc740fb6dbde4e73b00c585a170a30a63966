@@ -1,0 +1,22 @@
+js/media_hall/main.js
+  s_856b7f4314a1d9::t_f38680474f8dfa 626
+  s_856b7f4314a1d9::t_f2baf0568260ee 573-595
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "960efc740fb6dbde4e73b00c585a170a30a63966",
+  "prompts": {},
+  "logical_commit_id": "960efc740fb6dbde4e73b00c585a170a30a63966",
+  "sessions": {
+    "s_856b7f4314a1d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d0d1cf1-5130-42fb-b5ed-d7fea40259ed",
+        "model": "deepseek/deepseek-flash"
+      },
+      "human_author": "huanghuisheng <huanghuisheng@bigo.sg>",
+      "total_additions": 24
+    }
+  }
+}
