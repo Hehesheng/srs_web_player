@@ -1,0 +1,54 @@
+rtc_player.html
+  s_856b7f4314a1d9::t_433b7e6a9961d8 63-81
+  s_856b7f4314a1d9::t_50e24a6ecc2969 51
+rtc_publisher.html
+  s_856b7f4314a1d9::t_8d38ce09f86b78 51
+js/media_hall/hostWorker.js
+  s_856b7f4314a1d9::t_4fd51b31ce619a 1-291
+media_hall.html
+  s_856b7f4314a1d9::t_8aa0bde7d475e3 1-6,8-26,30-206,208-243
+  s_856b7f4314a1d9::t_3a8cd98a9c727c 27-29
+  s_856b7f4314a1d9::t_6c1c8ae843a0e5 7
+  s_856b7f4314a1d9::t_20824a2678fb4b 207
+js/media_hall/sync.js
+  s_856b7f4314a1d9::t_62deead81db39f 1-366
+js/media_hall/member.js
+  s_856b7f4314a1d9::t_17057804a1ba75 228,237
+  s_856b7f4314a1d9::t_25932971edfb5b 398-401
+  s_856b7f4314a1d9::t_fea8a6ff5a3ba6 49,61-62
+  s_856b7f4314a1d9::t_efa74ccdb77459 24,30
+  s_856b7f4314a1d9::t_09014763cadcf1 188
+  s_856b7f4314a1d9::t_9e75a5b0937494 320,328-333
+  s_856b7f4314a1d9::t_0b1cf0a963e0a0 211
+  s_856b7f4314a1d9::t_8dfda452e0ef40 1-23,25-29,31-48,50-60,63-187,189-210,212-227,229-236,238-319,321-327,334-397,402-416
+js/media_hall/protocol.js
+  s_856b7f4314a1d9::t_155fb29aba0408 1-92
+js/media_hall/ui.js
+  s_856b7f4314a1d9::t_0673e9bf4e9894 1-142
+js/media_hall/host.js
+  s_856b7f4314a1d9::t_147cb583fe92af 36-43
+  s_856b7f4314a1d9::t_0862aaac5be9d0 1-35,44-231
+js/media_hall/main.js
+  s_856b7f4314a1d9::t_1fc0a5d2352489 374,378,388-391
+  s_856b7f4314a1d9::t_71f621b611b060 1-373,375-377,379-387,392-496,498-617
+  s_856b7f4314a1d9::t_284ed7fe66aed0 497
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "05d22b7530eb9542c9f04b96495c4b95796617ec",
+  "prompts": {},
+  "logical_commit_id": "05d22b7530eb9542c9f04b96495c4b95796617ec",
+  "sessions": {
+    "s_856b7f4314a1d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d0d1cf1-5130-42fb-b5ed-d7fea40259ed",
+        "model": "deepseek/deepseek-flash"
+      },
+      "human_author": "huanghuisheng <huanghuisheng@bigo.sg>",
+      "total_additions": 2441,
+      "total_deletions": 23
+    }
+  }
+}
