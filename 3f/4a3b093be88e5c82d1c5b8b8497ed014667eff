@@ -1,0 +1,56 @@
+js/media_hall/hostWorker.js
+  s_856b7f4314a1d9::t_0d8a285c59fc99 41
+js/media_hall/host.js
+  s_856b7f4314a1d9::t_fd781aa28f35a1 12,18
+  s_856b7f4314a1d9::t_fb08b5c3371173 189-191
+  s_856b7f4314a1d9::t_ddf8cd56b5a743 166-169
+  s_856b7f4314a1d9::t_917e8557a3ad56 179
+js/media_hall/main.js
+  s_856b7f4314a1d9::t_5062bc33cbc2ae 949
+  s_856b7f4314a1d9::t_083e49c0b77e61 25-27,35
+  s_856b7f4314a1d9::t_2b3f896d77f78b 230-231
+  s_856b7f4314a1d9::t_c61c71e3e874a2 353-379,398-401,405-412,414-477
+  s_856b7f4314a1d9::t_cb34d42b369c60 761-762
+  s_856b7f4314a1d9::t_869c95c13fd8dd 833-837
+  s_856b7f4314a1d9::t_2e68781844149b 30,32
+  s_856b7f4314a1d9::t_9973409ac56b5b 380-397
+  s_856b7f4314a1d9::t_4a75f49ea0d29b 288,290
+  s_856b7f4314a1d9::t_21b81413134a01 745
+  s_856b7f4314a1d9::t_f7b8e90841acdb 24,28-29,33-34
+  s_856b7f4314a1d9::t_99714ae928bd27 493,496
+  s_856b7f4314a1d9::t_15bae1a19580a4 31
+  s_856b7f4314a1d9::t_cff2d2a52d60c2 176,180-196
+  s_856b7f4314a1d9::t_4a47f49ab82f43 111-175,177-179,197-198
+  s_856b7f4314a1d9::t_d20df470ab9e1c 494
+  s_856b7f4314a1d9::t_6128178a4b4ebc 724
+  s_856b7f4314a1d9::t_89b057056d9063 402-404
+  s_856b7f4314a1d9::t_393c5cffa887b9 758-760
+  s_856b7f4314a1d9::t_5650e77b912300 351,644-714,723,725-730
+  s_856b7f4314a1d9::t_8e19ef8fee3750 512
+  s_856b7f4314a1d9::t_e1890391426c03 352
+media_hall.html
+  s_856b7f4314a1d9::t_de2d5747afc392 191-210
+  s_856b7f4314a1d9::t_de4c848b661ca8 105-111
+  s_856b7f4314a1d9::t_62cbc1510208a8 246-251
+  s_856b7f4314a1d9::t_d4e5a2f3573652 25-28
+  s_856b7f4314a1d9::t_e3384516548027 189-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "3f4a3b093be88e5c82d1c5b8b8497ed014667eff",
+  "prompts": {},
+  "logical_commit_id": "3f4a3b093be88e5c82d1c5b8b8497ed014667eff",
+  "sessions": {
+    "s_856b7f4314a1d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d0d1cf1-5130-42fb-b5ed-d7fea40259ed",
+        "model": "deepseek/deepseek-flash"
+      },
+      "human_author": "huanghuisheng <huanghuisheng@bigo.sg>",
+      "total_additions": 375,
+      "total_deletions": 4
+    }
+  }
+}
