@@ -1303,6 +1303,29 @@ function wire() {
         }
     });
 
+    // Picture-in-picture is a local view option on both sides: it never changes
+    // what the room plays, so members get it too.
+    const wirePictureInPicture = (video, button) => {
+        if (!document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== "function") {
+            button.classList.add("hidden");
+            return;
+        }
+        const sync = () => button.classList.toggle("text-sky-300", document.pictureInPictureElement === video);
+        button.addEventListener("click", async () => {
+            try {
+                if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+                else await video.requestPictureInPicture();
+            } catch {
+                toast("当前视频无法进入浮窗", "error");
+            }
+            sync();
+        });
+        video.addEventListener("enterpictureinpicture", sync);
+        video.addEventListener("leavepictureinpicture", sync);
+        sync();
+    };
+    wirePictureInPicture($("member-video"), $("btn-pip"));
+
     // The host video has no native controls: it uses the same bar as members.
     (() => {
         const video = $("host-video");
@@ -1379,6 +1402,41 @@ function wire() {
             }
         });
 
+        // Playback rate: the host sets the pace and members follow through the
+        // host timeline, so only this bar carries the control.
+        const rateButton = $("btn-host-rate");
+        const rateMenu = $("host-rate-menu");
+        const rateLabel = $("host-rate-label");
+        const rateOptions = Array.from(rateMenu.querySelectorAll("[data-rate]"));
+        const syncRate = () => {
+            const rate = Number(video.playbackRate) || 1;
+            rateLabel.textContent = `${Number(rate.toFixed(2))}x`;
+            for (const option of rateOptions) {
+                const active = Math.abs(Number(option.dataset.rate) - rate) < 0.001;
+                option.classList.toggle("text-sky-300", active);
+                option.classList.toggle("font-bold", active);
+            }
+        };
+        rateButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            rateMenu.classList.toggle("hidden");
+        });
+        for (const option of rateOptions) {
+            option.addEventListener("click", () => {
+                const rate = Number(option.dataset.rate) || 1;
+                video.playbackRate = rate;
+                // A new source resets playbackRate to defaultPlaybackRate, so the
+                // chosen speed has to live there to survive playlist switches.
+                video.defaultPlaybackRate = rate;
+                rateMenu.classList.add("hidden");
+                syncRate();
+            });
+        }
+        document.addEventListener("click", () => rateMenu.classList.add("hidden"));
+        video.addEventListener("ratechange", syncRate);
+
+        wirePictureInPicture(video, $("btn-host-pip"));
+
         for (const name of ["play", "pause", "ended", "loadedmetadata", "durationchange", "seeking"]) {
             video.addEventListener(name, syncIcon);
         }
@@ -1389,6 +1447,7 @@ function wire() {
         syncIcon();
         syncTimeline();
         syncVolumeIcon();
+        syncRate();
     })();
 
     window.addEventListener("beforeunload", (event) => {

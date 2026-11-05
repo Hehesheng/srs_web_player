@@ -67,7 +67,6 @@ export class MemberController {
         video.controls = false;
         video.muted = false;
         video.volume = 1;
-        video.disablePictureInPicture = true;
         video.playsInline = true;
         this.mediaErrorHandler = () => this.handleMediaError();
         video.addEventListener("error", this.mediaErrorHandler);

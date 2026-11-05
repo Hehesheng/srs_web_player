@@ -129,7 +129,7 @@ export class HostController {
         document.addEventListener("visibilitychange", this.onVisibility);
 
         this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_PLAYING_MS);
-        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
     }
 
     heartbeat() {
@@ -205,7 +205,7 @@ export class HostController {
         video.src = this.objectUrl;
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
     }
 
     /** Switch to a server-relayed URL item (url rooms and url playlist items). */
@@ -229,7 +229,7 @@ export class HostController {
         else video.removeAttribute("src");
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
     }
 
     /** Drop the current media when the playlist becomes empty. */
@@ -255,7 +255,7 @@ export class HostController {
             // ignore
         }
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
+        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
     }
 
     play() {

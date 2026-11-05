@@ -206,9 +206,27 @@
                             </button>
                             <input id="host-volume" type="range" min="0" max="100" value="100" class="w-24" aria-label="音量">
                         </div>
-                        <button id="btn-host-fullscreen" class="pointer-events-auto rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
-                        </button>
+                        <div class="pointer-events-auto flex items-center gap-2">
+                            <div class="relative">
+                                <button id="btn-host-rate" class="rounded-lg bg-white/10 px-2.5 py-2 font-mono text-[11px] font-bold text-slate-200 backdrop-blur transition hover:bg-white/20" title="播放倍速">
+                                    <span id="host-rate-label">1x</span>
+                                </button>
+                                <div id="host-rate-menu" class="absolute bottom-full right-0 mb-2 hidden w-24 overflow-hidden rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur">
+                                    <button data-rate="0.5" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">0.5x</button>
+                                    <button data-rate="0.75" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">0.75x</button>
+                                    <button data-rate="1" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">1x</button>
+                                    <button data-rate="1.25" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">1.25x</button>
+                                    <button data-rate="1.5" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">1.5x</button>
+                                    <button data-rate="2" class="host-rate-option flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-300 transition hover:bg-white/10">2x</button>
+                                </div>
+                            </div>
+                            <button id="btn-host-pip" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="浮窗播放">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/></svg>
+                            </button>
+                            <button id="btn-host-fullscreen" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -319,9 +337,14 @@
                             <option value="large">大</option>
                         </select>
                     </div>
-                    <button id="btn-fullscreen" class="pointer-events-auto rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
-                    </button>
+                    <div class="pointer-events-auto flex items-center gap-2">
+                        <button id="btn-pip" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="浮窗播放">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/></svg>
+                        </button>
+                        <button id="btn-fullscreen" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
 
