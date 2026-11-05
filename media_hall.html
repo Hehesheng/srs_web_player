@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <title>媒体播放厅 - SRS</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+        body { font-family: 'Inter', system-ui, sans-serif; background: #070b14; color: #f8fafc; }
+        .glass-card {
+            background: rgba(17, 25, 40, 0.72);
+            backdrop-filter: blur(18px);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.9);
+        }
+        .glow-line {
+            background: linear-gradient(90deg, #38bdf8, #34d399, #a78bfa);
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        #host-video, #member-video { background: #000; }
+        .member-shell:fullscreen { background: #000; padding: 0; }
+        .member-shell:fullscreen video { height: 100vh; width: 100vw; object-fit: contain; }
+        @media (hover: none) {
+            .member-controls { opacity: 1 !important; }
+        }
+        .fade-in { animation: fade-in 0.35s ease-out both; }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        input[type="file"]::file-selector-button {
+            background: rgba(59, 130, 246, 0.18);
+            color: #93c5fd;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.75rem;
+            padding: 0.55rem 0.9rem;
+            margin-right: 0.8rem;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        input[type="range"] { accent-color: #38bdf8; }
+    </style>
+</head>
+<body class="min-h-screen pb-16">
+    <nav class="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-xl">
+        <div class="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 md:px-8">
+            <div class="flex items-center gap-8">
+                <a href="rtc_player.html" class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-sky-400 via-emerald-400 to-violet-400 bg-clip-text text-transparent">SRS · 媒体厅</a>
+                <div class="hidden space-x-6 text-sm font-medium sm:flex">
+                    <a href="rtc_player.html" class="text-slate-400 transition hover:text-white">RTC 播放器</a>
+                    <a href="rtc_publisher.html" class="text-slate-400 transition hover:text-white">RTC 推流</a>
+                    <a href="media_hall.html" class="border-b-2 border-sky-400 pb-1 text-white">媒体播放厅</a>
+                </div>
+            </div>
+            <div class="text-[10px] font-mono uppercase tracking-[0.25em] text-slate-500">HALL · SYNC</div>
+        </div>
+    </nav>
+
+    <main class="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
+        <!-- 落地页 -->
+        <section id="view-landing" class="fade-in">
+            <div class="mb-10 text-center">
+                <h1 class="text-3xl font-extrabold tracking-tight md:text-4xl">一起看，同步看</h1>
+                <p class="mt-3 text-sm text-slate-400">房主选择本地视频或在线地址，成员打开链接即可跟随房主的播放进度。</p>
+            </div>
+
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div class="glass-card rounded-3xl p-7">
+                    <div class="mb-6 flex items-center gap-3">
+                        <span class="h-6 w-2 rounded-full bg-sky-400"></span>
+                        <h2 class="text-sm font-bold uppercase tracking-[0.2em] text-slate-200">创建房间（房主）</h2>
+                    </div>
+
+                    <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">房间名称</label>
+                    <input id="create-name" maxlength="64" placeholder="周五电影夜"
+                        class="mb-5 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm outline-none transition focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20">
+
+                    <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">媒体来源</label>
+                    <div class="mb-4 grid grid-cols-2 gap-3">
+                        <button id="media-kind-file" data-kind="host_file"
+                            class="kind-btn rounded-xl border border-sky-500/60 bg-sky-500/10 px-4 py-3 text-left text-sm font-semibold text-sky-300">本地文件</button>
+                        <button id="media-kind-url" data-kind="url"
+                            class="kind-btn rounded-xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-left text-sm font-semibold text-slate-400">在线地址</button>
+                    </div>
+
+                    <div id="file-fields">
+                        <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">选择视频</label>
+                        <input id="create-file" type="file" accept="video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.m4v,.mov"
+                            class="mb-2 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-3 text-sm text-slate-300">
+                        <p class="text-[11px] text-slate-500">房主标签页需要保持打开；文件不会整段上传，成员按需读取分片。</p>
+                    </div>
+
+                    <div id="url-fields" class="hidden">
+                        <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">视频 URL（需支持 Range）</label>
+                        <input id="create-url" placeholder="https://example.com/movie.mp4"
+                            class="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm outline-none transition focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20">
+                        <p class="mt-2 text-[11px] text-slate-500">仅支持 http/https；服务端会拒绝私网地址。</p>
+                    </div>
+
+                    <button id="btn-create"
+                        class="mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 px-5 py-3.5 text-sm font-bold text-white shadow-xl shadow-sky-900/30 transition hover:from-sky-400 hover:to-blue-500 active:scale-[0.99]">
+                        创建并开始
+                    </button>
+                    <p id="create-error" class="mt-4 hidden text-xs text-rose-400"></p>
+                </div>
+
+                <div class="glass-card rounded-3xl p-7">
+                    <div class="mb-6 flex items-center gap-3">
+                        <span class="h-6 w-2 rounded-full bg-emerald-400"></span>
+                        <h2 class="text-sm font-bold uppercase tracking-[0.2em] text-slate-200">加入房间（成员）</h2>
+                    </div>
+
+                    <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">房间码 / 分享链接</label>
+                    <input id="join-code" maxlength="256" placeholder="例如 8F3K2Q"
+                        class="mb-5 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm uppercase tracking-[0.2em] outline-none transition focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20">
+
+                    <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">你的昵称</label>
+                    <input id="join-name" maxlength="32" placeholder="访客"
+                        class="mb-6 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm outline-none transition focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20">
+
+                    <button id="btn-join"
+                        class="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 px-5 py-3.5 text-sm font-bold text-white shadow-xl shadow-emerald-900/30 transition hover:from-emerald-400 hover:to-teal-500 active:scale-[0.99]">
+                        加入并跟随
+                    </button>
+                    <p id="join-error" class="mt-4 hidden text-xs text-rose-400"></p>
+
+                    <div class="mt-8 rounded-2xl border border-slate-800/80 bg-slate-950/40 p-4 text-[11px] leading-relaxed text-slate-500">
+                        成员端不提供进度条、播放/暂停和倍速控制，播放完全由房主决定；音量、静音和全屏仍可自行使用。
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 房主视图 -->
+        <section id="view-host" class="hidden fade-in">
+            <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <h1 id="host-room-name" class="text-xl font-bold tracking-tight">媒体播放厅</h1>
+                        <span id="host-host-badge" class="rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-sky-300">HOST</span>
+                    </div>
+                    <p id="host-media-name" class="mt-1 text-xs text-slate-500">--</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <div class="flex items-center gap-2 rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2">
+                        <span class="text-[10px] uppercase tracking-[0.18em] text-slate-500">房间码</span>
+                        <span id="host-room-code" class="font-mono text-sm font-bold tracking-[0.2em] text-sky-300">------</span>
+                        <button id="btn-copy-link" class="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制链接</button>
+                    </div>
+                    <button id="btn-end-room" class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-bold text-rose-300 transition hover:bg-rose-500/20">结束房间</button>
+                </div>
+            </div>
+
+            <div class="glass-card overflow-hidden rounded-3xl">
+                <video id="host-video" controls playsinline class="max-h-[72vh] w-full object-contain"></video>
+            </div>
+
+            <div class="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
+                <div class="glass-card rounded-2xl p-5 lg:col-span-2">
+                    <div class="mb-3 flex items-center justify-between">
+                        <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">连接状态</h2>
+                        <span id="host-status" class="rounded-full bg-slate-800/80 px-3 py-1 text-[10px] font-bold text-slate-400">等待连接</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                        <div><div class="text-[10px] uppercase tracking-widest text-slate-600">成员</div><div id="host-member-count" class="mt-1 font-bold text-slate-200">0</div></div>
+                        <div><div class="text-[10px] uppercase tracking-widest text-slate-600">播放位置</div><div id="host-position" class="mt-1 font-mono text-slate-200">00:00</div></div>
+                        <div><div class="text-[10px] uppercase tracking-widest text-slate-600">倍速</div><div id="host-rate" class="mt-1 font-mono text-slate-200">1.00x</div></div>
+                        <div><div class="text-[10px] uppercase tracking-widest text-slate-600">预读</div><div id="host-buffered" class="mt-1 font-mono text-slate-200">--</div></div>
+                    </div>
+                    <p class="mt-4 text-[11px] leading-relaxed text-slate-500">请保持此标签页打开。关闭或休眠后，未被成员缓存的分片将无法读取。</p>
+                </div>
+                <div class="glass-card rounded-2xl p-5">
+                    <h2 class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">成员</h2>
+                    <ul id="host-members" class="custom-scrollbar max-h-44 space-y-2 overflow-y-auto text-sm text-slate-400">
+                        <li class="text-xs italic text-slate-600">还没有成员加入</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- 成员视图 -->
+        <section id="view-member" class="hidden fade-in">
+            <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div class="flex flex-wrap items-center gap-3">
+                    <h1 id="member-room-name" class="text-xl font-bold tracking-tight">媒体播放厅</h1>
+                    <span class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300">MEMBER</span>
+                    <span id="member-host-badge" class="rounded-full bg-slate-800/80 px-3 py-1 text-[10px] font-bold text-slate-400">连接中</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                    <span>房间 <span id="member-room-code" class="font-mono tracking-[0.2em] text-slate-300">------</span></span>
+                    <span>RTT <span id="member-rtt" class="font-mono text-slate-300">--</span></span>
+                    <span>漂移 <span id="member-drift" class="font-mono text-slate-300">--</span></span>
+                    <span>D <span id="member-d" class="font-mono text-slate-300">0.5s</span></span>
+                    <span>倍速 <span id="member-rate" class="font-mono text-slate-300">1.00x</span></span>
+                </div>
+            </div>
+
+            <div id="member-shell" class="member-shell glass-card group relative overflow-hidden rounded-3xl bg-black">
+                <video id="member-video" playsinline webkit-playsinline class="max-h-[78vh] w-full object-contain"></video>
+
+                <div id="member-overlay" class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-slate-950/85 backdrop-blur-sm">
+                    <div class="text-sm text-slate-300" id="member-overlay-text">等待房主开始播放…</div>
+                    <button id="member-play-btn" class="hidden rounded-xl bg-sky-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-sky-900/40 transition hover:bg-sky-400">点击播放</button>
+                </div>
+
+                <div class="member-controls pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                    <div class="pointer-events-auto flex items-center gap-3">
+                        <button id="btn-mute" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="静音">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                        </button>
+                        <input id="member-volume" type="range" min="0" max="100" value="100" class="w-24">
+                    </div>
+                    <button id="btn-fullscreen" class="pointer-events-auto rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
+                <div class="glass-card rounded-2xl p-5 lg:col-span-2">
+                    <h2 class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">观看提示</h2>
+                    <p class="text-xs leading-relaxed text-slate-500">
+                        播放进度由房主控制，成员不能拖动、暂停或修改倍速。系统会在网络抖动时自动调整本地缓冲和播放速率；
+                        只有音量、静音和全屏由你自己控制。
+                    </p>
+                    <p id="member-status" class="mt-3 text-xs text-slate-400">正在同步…</p>
+                </div>
+                <div class="glass-card rounded-2xl p-5">
+                    <h2 class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">房间成员</h2>
+                    <ul id="member-members" class="custom-scrollbar max-h-44 space-y-2 overflow-y-auto text-sm text-slate-400">
+                        <li class="text-xs italic text-slate-600">--</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-[100] hidden -translate-x-1/2 rounded-xl border border-slate-700/80 bg-slate-900/95 px-5 py-3 text-xs font-semibold text-slate-200 shadow-2xl"></div>
+
+    <script type="module" src="js/media_hall/main.js"></script>
+</body>
+</html>
