@@ -1266,18 +1266,32 @@ function wire() {
         if (event.key === "Enter") joinRoom();
     });
 
+    // Unmuting restores the last audible level: a slider dragged to 0 leaves the
+    // element silent even after the mute flag is cleared.
+    let memberVolume = 1;
+    const syncMemberMute = () => {
+        const video = $("member-video");
+        $("btn-mute").classList.toggle("text-rose-300", video.muted || video.volume === 0);
+    };
     $("btn-mute").addEventListener("click", () => {
         const video = $("member-video");
-        video.muted = !video.muted;
-        $("btn-mute").classList.toggle("text-rose-300", video.muted);
-        $("member-volume").value = video.muted ? "0" : String(Math.round(video.volume * 100));
+        if (video.muted || video.volume === 0) {
+            video.muted = false;
+            if (video.volume === 0) video.volume = memberVolume || 1;
+            $("member-volume").value = String(Math.round(video.volume * 100));
+        } else {
+            video.muted = true;
+            $("member-volume").value = "0";
+        }
+        syncMemberMute();
     });
     $("member-volume").addEventListener("input", (event) => {
         const video = $("member-video");
         const value = Number(event.target.value) / 100;
         video.volume = value;
         video.muted = value === 0;
-        $("btn-mute").classList.toggle("text-rose-300", video.muted);
+        if (value > 0) memberVolume = value;
+        syncMemberMute();
     });
     $("btn-fullscreen").addEventListener("click", async () => {
         const shell = $("member-shell");
@@ -1299,6 +1313,7 @@ function wire() {
         const volume = $("host-volume");
         const muteButton = $("btn-host-mute");
         let scrubbing = false;
+        let lastVolume = 1;
 
         const syncIcon = () => {
             const playing = !video.paused && !video.ended;
@@ -1337,14 +1352,21 @@ function wire() {
             syncTimeline();
         });
         muteButton.addEventListener("click", () => {
-            video.muted = !video.muted;
-            volume.value = video.muted ? "0" : String(Math.round(video.volume * 100));
+            if (video.muted || video.volume === 0) {
+                video.muted = false;
+                if (video.volume === 0) video.volume = lastVolume || 1;
+                volume.value = String(Math.round(video.volume * 100));
+            } else {
+                video.muted = true;
+                volume.value = "0";
+            }
             syncVolumeIcon();
         });
         volume.addEventListener("input", (event) => {
             const value = Number(event.target.value) / 100;
             video.volume = value;
             video.muted = value === 0;
+            if (value > 0) lastVolume = value;
             syncVolumeIcon();
         });
         $("btn-host-fullscreen").addEventListener("click", async () => {
