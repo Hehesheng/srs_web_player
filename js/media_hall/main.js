@@ -22,7 +22,8 @@ const HOST_KEY = "hall_host_session";
 const MEMBER_PREFIX = "hall_member_";
 const MAX_HOST_FILE_BYTES = 64 * 1024 * 1024 * 1024;
 const MAX_SUBTITLE_BYTES = 10 * 1024 * 1024;
-const SUBTITLE_TRACK_FLAG = "hall-subtitle";
+const SUBTITLE_TRACK_FLAG = "hallSubtitle";
+const SUBTITLE_TRACK_SELECTOR = "track[data-hall-subtitle]";
 const SUBTITLE_SIZE_KEY = "hall_subtitle_size";
 const SUBTITLE_SIZE_CLASSES = ["cue-small", "cue-medium", "cue-large"];
 
@@ -161,7 +162,7 @@ async function uploadSubtitle(session, file) {
 
 function removeSubtitleTracks(video) {
     if (!video) return;
-    video.querySelectorAll(`track[data-${SUBTITLE_TRACK_FLAG}]`).forEach((track) => track.remove());
+    video.querySelectorAll(SUBTITLE_TRACK_SELECTOR).forEach((track) => track.remove());
 }
 
 function addSubtitleTrack(video, subtitle, visible) {
@@ -181,7 +182,7 @@ function addSubtitleTrack(video, subtitle, visible) {
 
 function setSubtitleTrackMode(video, visible) {
     if (!video) return;
-    video.querySelectorAll(`track[data-${SUBTITLE_TRACK_FLAG}]`).forEach((track) => {
+    video.querySelectorAll(SUBTITLE_TRACK_SELECTOR).forEach((track) => {
         if (track.track) track.track.mode = visible ? "showing" : "hidden";
     });
 }
@@ -389,7 +390,7 @@ function applyHostVideoSubtitle() {
         removeSubtitleTracks(video);
         return;
     }
-    const track = video.querySelector(`track[data-${SUBTITLE_TRACK_FLAG}]`);
+    const track = video.querySelector(SUBTITLE_TRACK_SELECTOR);
     if (!track || track.dataset.subtitleId !== subtitle.subtitle_id) {
         addSubtitleTrack(video, subtitle, visible);
     } else {
@@ -695,7 +696,7 @@ function applyMemberSubtitles(roomState) {
     if (!subtitle) {
         removeSubtitleTracks(video);
     } else {
-        const track = video ? video.querySelector(`track[data-${SUBTITLE_TRACK_FLAG}]`) : null;
+        const track = video ? video.querySelector(SUBTITLE_TRACK_SELECTOR) : null;
         if (!track || track.dataset.subtitleId !== subtitle.subtitle_id) {
             addSubtitleTrack(video, subtitle, memberSubtitlesVisible);
         } else {
