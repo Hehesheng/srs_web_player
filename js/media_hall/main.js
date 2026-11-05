@@ -580,6 +580,51 @@ async function addHostFiles(files) {
     }
 }
 
+async function addHostUrl() {
+    const session = state.room;
+    if (!session || !state.host) return;
+    const input = $("host-url-input");
+    const button = $("btn-submit-url");
+    if (button.disabled) return;
+    const url = (input.value || "").trim();
+    if (!/^https?:\/\//i.test(url)) {
+        toast("请输入 http(s) 开头的视频地址", "error");
+        input.focus();
+        return;
+    }
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = "正在探测…";
+    try {
+        // The server probes the address before accepting the item, so this can
+        // take a moment; the item itself is served through the hall relay.
+        const data = await request(
+            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/playlist`,
+            {
+                method: "POST",
+                headers: { "X-Host-Token": session.host_token },
+                body: { kind: "url", url },
+            }
+        );
+        session.media = data.media;
+        session.media_url = data.media_url;
+        persistHostSession();
+        applyHostPlaylistPayload(data);
+        if (data.active) {
+            switchHostToMedia(data.media, data.media_url);
+            state.host.play();
+        }
+        const added = (data.playlist || []).find((item) => item.media_id === data.media_id);
+        input.value = "";
+        toast(`已添加「${(added && added.name) || "网络视频"}」`, "success");
+    } catch (error) {
+        toast(error.message || "添加失败", "error");
+    } finally {
+        button.disabled = false;
+        button.textContent = label;
+    }
+}
+
 async function playPlaylistItem(item) {
     const session = state.room;
     if (!session || !state.host || !item) return;
@@ -1215,12 +1260,49 @@ function wire() {
     wireHostSubtitleControls();
     const addMediaButton = $("btn-add-media");
     const addMediaInput = $("host-media-files");
-    if (addMediaButton && addMediaInput) {
-        addMediaButton.addEventListener("click", () => addMediaInput.click());
+    const addMediaMenu = $("add-media-menu");
+    const addUrlRow = $("host-add-url");
+    const addUrlInput = $("host-url-input");
+    const addUrlHint = $("host-url-hint");
+    const closeAddMenu = () => addMediaMenu.classList.add("hidden");
+    const showUrlRow = (show) => {
+        addUrlRow.classList.toggle("hidden", !show);
+        addUrlRow.classList.toggle("flex", show);
+        addUrlHint.classList.toggle("hidden", !show);
+        if (show) addUrlInput.focus();
+    };
+    if (addMediaButton && addMediaInput && addMediaMenu) {
+        addMediaButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            addMediaMenu.classList.toggle("hidden");
+        });
+        document.addEventListener("click", closeAddMenu);
+        $("btn-add-file").addEventListener("click", () => {
+            closeAddMenu();
+            addMediaInput.click();
+        });
+        $("btn-add-url").addEventListener("click", () => {
+            closeAddMenu();
+            showUrlRow(true);
+        });
         addMediaInput.addEventListener("change", () => {
             const files = Array.from(addMediaInput.files || []);
             addMediaInput.value = "";
             if (files.length) addHostFiles(files);
+        });
+        $("btn-submit-url").addEventListener("click", addHostUrl);
+        $("btn-cancel-url").addEventListener("click", () => {
+            addUrlInput.value = "";
+            showUrlRow(false);
+        });
+        addUrlInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                addHostUrl();
+            } else if (event.key === "Escape") {
+                addUrlInput.value = "";
+                showUrlRow(false);
+            }
         });
     }
     const autoplayBox = $("host-autoplay");
