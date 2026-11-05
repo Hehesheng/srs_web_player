@@ -30,6 +30,7 @@ export class HostController {
         this.lastSentAt = 0;
         this.timer = null;
         this.listeners = [];
+        this.onVisibility = null;
     }
 
     start() {
@@ -112,6 +113,15 @@ export class HostController {
             token: this.session.host_token,
         });
 
+        // Hidden tabs throttle timers, so tell the server immediately that the
+        // host is still playing and let it keep projecting while we are away.
+        this.onVisibility = () => {
+            if (!this.worker) return;
+            this.sendState(false);
+            this.emitProgress();
+        };
+        document.addEventListener("visibilitychange", this.onVisibility);
+
         this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_PLAYING_MS);
         this.onProgress({ position: 0, rate: 1, paused: true, waiting: false });
     }
@@ -153,6 +163,7 @@ export class HostController {
                 rate: Number((Number(video.playbackRate) || 1).toFixed(3)),
                 playing,
                 buffering,
+                background: document.visibilityState === "hidden",
                 duration: Number.isFinite(video.duration) ? Number(video.duration.toFixed(3)) : 0,
             },
         });
@@ -238,6 +249,10 @@ export class HostController {
     stop() {
         if (this.timer) clearInterval(this.timer);
         this.timer = null;
+        if (this.onVisibility) {
+            document.removeEventListener("visibilitychange", this.onVisibility);
+            this.onVisibility = null;
+        }
 
         for (const [name, handler] of this.listeners) {
             this.video.removeEventListener(name, handler);
