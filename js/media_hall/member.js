@@ -309,6 +309,11 @@ export class MemberController {
         }
     }
 
+    correctNow() {
+        if (!this.sync) return false;
+        return this.sync.correctNow();
+    }
+
     resumeFromGesture() {
         if (!this.sync) return Promise.resolve(false);
         return this.sync.retryPlay().then((ok) => {

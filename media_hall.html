@@ -122,6 +122,16 @@
                         <h2 class="text-sm font-bold uppercase tracking-[0.2em] text-slate-200">加入房间（成员）</h2>
                     </div>
 
+                    <div class="mb-5 rounded-2xl border border-slate-800/80 bg-slate-950/40 p-3">
+                        <div class="mb-2 flex items-center justify-between">
+                            <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">进行中的房间</span>
+                            <button id="btn-refresh-rooms" type="button" class="text-[10px] text-slate-500 transition hover:text-sky-300">刷新</button>
+                        </div>
+                        <ul id="room-list" class="custom-scrollbar max-h-36 space-y-1.5 overflow-y-auto text-xs">
+                            <li class="text-slate-600">加载中…</li>
+                        </ul>
+                    </div>
+
                     <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">房间码 / 分享链接</label>
                     <input id="join-code" maxlength="256" placeholder="例如 8F3K2Q"
                         class="mb-5 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-sm uppercase tracking-[0.2em] outline-none transition focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20">
@@ -223,7 +233,9 @@
                 <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
                     <span>房间 <span id="member-room-code" class="font-mono tracking-[0.2em] text-slate-300">------</span></span>
                     <span>RTT <span id="member-rtt" class="font-mono text-slate-300">--</span></span>
-                    <span>漂移 <span id="member-drift" class="font-mono text-slate-300">--</span></span>
+                    <span>漂移 <span id="member-drift" class="font-mono text-slate-300">--</span>
+                        <button id="btn-sync-correct" type="button" class="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-slate-200 transition hover:bg-sky-500/30 hover:text-sky-200" title="立即校正到目标位置">校正</button>
+                    </span>
                     <span>D <span id="member-d" class="font-mono text-slate-300">0.5s</span></span>
                     <span>倍速 <span id="member-rate" class="font-mono text-slate-300">1.00x</span></span>
                 </div>

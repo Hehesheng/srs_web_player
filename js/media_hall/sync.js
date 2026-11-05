@@ -4,8 +4,8 @@
  * The host publishes a server-timestamped timeline.  Every member estimates its
  * clock offset with NTP-style pings, then rides a small PLL:
  *
- *   - |drift| < 0.5s   : play at host rate
- *   - 0.5s .. 3s       : gently correct within +/-10% of host rate
+ *   - |drift| < 0.2s   : play at host rate
+ *   - 0.2s .. 3s       : gently correct within +/-10% of host rate
  *   - 3s .. 8s         : hard seek after the drift persists for 1s
  *   - > 8s             : hard seek immediately
  *
@@ -15,6 +15,7 @@
 
 const MIN_SEEK_INTERVAL = 1500;
 const CORRECTION_COOLDOWN = 8000;
+const DRIFT_TOLERANCE = 0.2;
 
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const median = (values) => {
@@ -211,6 +212,14 @@ export class SyncController {
         this.hardSeek(target, force, urgent);
     }
 
+    correctNow() {
+        const target = this.targetPosition();
+        if (target == null) return false;
+        this.hardSeek(target, true, true);
+        this.report();
+        return true;
+    }
+
     hardSeek(target, force = false, urgent = false) {
         const now = performance.now();
         if (!urgent) {
@@ -310,7 +319,7 @@ export class SyncController {
             this.bigDriftSince = 0;
             const base = Number(host.rate) || 1;
             let rate = base;
-            if (magnitude > 0.5) {
+            if (magnitude > DRIFT_TOLERANCE) {
                 rate = clamp(base - drift * 0.06, base - 0.1, base + 0.1);
             }
             rate = clamp(rate, 0.25, 4);

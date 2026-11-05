@@ -44,6 +44,7 @@ const state = {
 };
 
 const overlayEntries = new Map();
+let roomListTimer = null;
 const OVERLAY_PRIORITY = ["ended", "fatal", "offline", "blocked", "connecting", "media", "buffering"];
 let overlayAction = null;
 
@@ -337,6 +338,82 @@ async function joinRoom() {
     }
 }
 
+// -- room list -------------------------------------------------------
+function roomSummaryLine(room) {
+    const parts = [`${Number(room.member_count) || 0} 人`];
+    if (!room.host_online) parts.push("房主离线");
+    if (room.media_name) parts.push(room.media_name);
+    return parts.join(" · ");
+}
+
+function renderRoomList(rooms) {
+    const list = $("room-list");
+    if (!list) return;
+    list.replaceChildren();
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "text-slate-600";
+        empty.textContent = "暂无进行中的房间，创建一个吧";
+        list.appendChild(empty);
+        return;
+    }
+    for (const room of rooms) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className =
+            "flex w-full items-center justify-between gap-3 rounded-lg border border-slate-800/80 bg-slate-900/50 px-3 py-2 text-left transition hover:border-sky-500/50 hover:bg-sky-500/10";
+        button.title = `加入 ${room.name || room.room_code}`;
+
+        const left = document.createElement("div");
+        left.className = "min-w-0";
+        const name = document.createElement("div");
+        name.className = "truncate text-xs font-semibold text-slate-200";
+        name.textContent = room.name || "媒体播放厅";
+        const meta = document.createElement("div");
+        meta.className = "mt-0.5 truncate text-[10px] text-slate-500";
+        meta.textContent = roomSummaryLine(room);
+        left.append(name, meta);
+
+        const code = document.createElement("span");
+        code.className = "shrink-0 font-mono text-[11px] tracking-[0.15em] text-sky-300";
+        code.textContent = room.room_code;
+
+        button.append(left, code);
+        button.addEventListener("click", () => {
+            $("join-code").value = room.room_code;
+            joinRoom();
+        });
+        item.appendChild(button);
+        list.appendChild(item);
+    }
+}
+
+async function refreshRoomList() {
+    if (state.role) return;
+    const list = $("room-list");
+    if (!list) return;
+    try {
+        const data = await request("/hall/api/rooms");
+        renderRoomList(data.rooms);
+    } catch {
+        if (!list.childElementCount) {
+            const failed = document.createElement("li");
+            failed.className = "text-slate-600";
+            failed.textContent = "房间列表加载失败，请点刷新重试";
+            list.appendChild(failed);
+        }
+    }
+}
+
+function startRoomListPolling() {
+    if (roomListTimer) return;
+    roomListTimer = setInterval(() => {
+        if (state.role || document.visibilityState !== "visible") return;
+        refreshRoomList();
+    }, 5000);
+}
+
 // -- host ------------------------------------------------------------
 function updateHostMembers(members) {
     const list = Array.isArray(members) ? members : [];
@@ -588,6 +665,7 @@ async function endCurrentRoom() {
     window.history.replaceState({}, "", window.location.pathname);
     setButtonsBusy(button, false);
     showView("landing");
+    refreshRoomList();
     toast("房间已结束", "success");
 }
 
@@ -704,6 +782,15 @@ function applyMemberSubtitles(roomState) {
         }
     }
     updateMemberSubtitleButton(subtitle);
+}
+
+function correctMemberNow() {
+    const controller = state.member && state.member.controller;
+    if (!controller || !controller.correctNow()) {
+        toast("同步信息尚未就绪，请稍后再试", "info");
+        return;
+    }
+    toast("已校正到目标位置", "success");
 }
 
 function toggleMemberSubtitles() {
@@ -832,6 +919,8 @@ function wire() {
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
     wireHostSubtitleControls();
+    $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
+    $("btn-sync-correct").addEventListener("click", correctMemberNow);
     $("btn-member-subtitles").addEventListener("click", toggleMemberSubtitles);
     $("member-subtitle-size").addEventListener("change", (event) => {
         setMemberSubtitleSize(event.target.value);
@@ -888,9 +977,9 @@ function wire() {
         }
     });
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && state.role === "host") {
-            requestWakeLock();
-        }
+        if (document.visibilityState !== "visible") return;
+        if (state.role === "host") requestWakeLock();
+        else if (!state.role) refreshRoomList();
     });
 }
 
@@ -961,6 +1050,8 @@ async function init() {
     if (restored) return;
 
     await endStoredHostSession();
+    await refreshRoomList();
+    startRoomListPolling();
 }
 
 init();
