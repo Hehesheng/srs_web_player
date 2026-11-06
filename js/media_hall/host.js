@@ -9,10 +9,11 @@ const HEARTBEAT_PLAYING_MS = 250;
 const HEARTBEAT_PAUSED_MS = 1000;
 
 export class HostController {
-    constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress, onEnded }) {
+    constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress, onEnded, onLoaded }) {
         this.video = video;
         this.file = file;
         this.session = session;
+        this.onLoaded = onLoaded || (() => {});
         this.onStatus = onStatus || (() => {});
         this.onMembers = onMembers || (() => {});
         this.onRoomState = onRoomState || (() => {});
@@ -58,6 +59,7 @@ export class HostController {
 
         listen("loadedmetadata", () => {
             this.ready = true;
+            this.onLoaded();
             this.sendState(false);
         });
         listen("canplay", () => {
@@ -103,7 +105,8 @@ export class HostController {
         });
         listen("error", () => {
             const code = video.error ? video.error.code : 0;
-            this.onError(`视频加载失败（错误码 ${code}），请确认文件格式可被浏览器播放`);
+            const detail = video.error && video.error.message ? video.error.message : "";
+            this.onError("视频加载失败", { kind: "media", code, detail });
         });
 
         this.worker = new Worker(new URL("./hostWorker.js", import.meta.url), { type: "module" });

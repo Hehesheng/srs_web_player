@@ -314,6 +314,50 @@
         return decodeTx3g(bytes);
     }
 
+    // Codec strings come from the sample entry, e.g. "avc1.640028" or
+    // "mp4a.40.2"; only the first part identifies the decoder.
+    var CODEC_NAMES = [
+        [/^(avc1|avc3|avc4)/i, "H.264", true],
+        [/^(hvc1|hev1|dvhe|dvh1)/i, "HEVC/H.265", false],
+        [/^vp09/i, "VP9", true],
+        [/^vp08/i, "VP8", true],
+        [/^av01/i, "AV1", true],
+        [/^(ac-3|ac3)/i, "AC3", false],
+        [/^(ec-3|eac3)/i, "E-AC3", false],
+        [/^(dtsc|dtsh|dtsl|dtse)/i, "DTS", false],
+        [/^opus/i, "Opus", true],
+        [/^flac/i, "FLAC", true],
+        [/^alac/i, "ALAC", false],
+    ];
+
+    function describeCodec(codec) {
+        var value = String(codec || "");
+        for (var i = 0; i < CODEC_NAMES.length; i += 1) {
+            if (CODEC_NAMES[i][0].test(value)) {
+                return { name: CODEC_NAMES[i][1], playable: CODEC_NAMES[i][2] };
+            }
+        }
+        if (/^mp4a/i.test(value)) {
+            return { name: /^mp4a\.6b/i.test(value) ? "MP3" : "AAC", playable: true };
+        }
+        return { name: value || "未知编码", playable: null };
+    }
+
+    /** Same shape as HallMkv.describeUnsupported() expects. */
+    function describeTracks(info) {
+        var out = { video: [], audio: [], subtitles: [] };
+        var tracks = (info && info.tracks) || [];
+        for (var i = 0; i < tracks.length; i += 1) {
+            var track = tracks[i];
+            var described = describeCodec(track.codec);
+            var entry = { codec: track.codec, name: described.name, playable: described.playable };
+            if (track.type === "video") out.video.push(entry);
+            else if (track.type === "audio") out.audio.push(entry);
+            else if (track.type === "subtitles" || track.type === "text") out.subtitles.push(entry);
+        }
+        return out;
+    }
+
     function isTextTrack(track) {
         var codec = String(track.codec || "").toLowerCase();
         if (codec === "tx3g" || codec === "text" || codec.indexOf("wvtt") === 0) return true;
@@ -398,24 +442,25 @@
 
     /**
      * @param {{file?: File, url?: string, size?: number}} source
-     * @returns {Promise<Array<{lang: string, label: string, name: string, vtt: string}>>}
+     * @returns {Promise<{tracks: Array<{lang: string, label: string, name: string, vtt: string}>, info: object|null}>}
      */
     async function extractSubtitles(source) {
-        if (!source) return [];
-        if (typeof MP4Box === "undefined") return [];
+        var empty = { tracks: [], info: null };
+        if (!source) return empty;
+        if (typeof MP4Box === "undefined") return empty;
         var reader = null;
         if (source.file) {
-            if (!source.file.size) return [];
+            if (!source.file.size) return empty;
             reader = fileReader(source.file);
         } else if (source.url && source.size > 0) {
             reader = urlReader(source.url, source.size);
         }
-        if (!reader) return [];
+        if (!reader) return empty;
 
         var header = await readMovieHeader(reader);
-        if (!header || !header.moov || header.moov.size > MAX_MOOV_BYTES) return [];
+        if (!header || !header.moov || header.moov.size > MAX_MOOV_BYTES) return empty;
         var moovBytes = await reader.read(header.moov.start, header.moov.end);
-        if (!moovBytes.length) return [];
+        if (!moovBytes.length) return empty;
         var ftypBytes = null;
         if (header.ftyp && header.ftyp.size <= 4096) {
             try {
@@ -426,6 +471,7 @@
         }
 
         var parsed = await parseMovieHeader(ftypBytes, moovBytes);
+        var info = describeTracks(parsed.info);
         var tracks = (parsed.info.tracks || []).filter(isTextTrack);
         var results = [];
         for (var i = 0; i < tracks.length && results.length < MAX_TRACKS; i += 1) {
@@ -451,12 +497,14 @@
                 vtt: vtt,
             });
         }
-        return results;
+        return { tracks: results, info: info };
     }
 
     window.HallEmbeddedSubs = {
         isMp4Media: isMp4Media,
         extractSubtitles: extractSubtitles,
+        normalizeLang: normalizeLang,
         languageLabel: languageLabel,
+        formatTime: formatTime,
     };
 })();

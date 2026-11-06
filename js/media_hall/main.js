@@ -214,36 +214,93 @@ function findActiveSubtitle(roomState) {
 // Browsers keep container subtitle tracks to themselves, so the host reads
 // them once and uploads them as ordinary room subtitles for that item.
 const embeddedSubsScanned = new Set();
+// Codec facts per media id, so a playback failure can name the culprit.
+const mediaCodecInfo = new Map();
+
+function uploadEmbeddedTracks(session, mediaId, tracks) {
+    return (async () => {
+        let added = 0;
+        for (const item of tracks) {
+            try {
+                const blob = new Blob([item.vtt], { type: "text/vtt;charset=utf-8" });
+                await uploadSubtitle(session, blob, {
+                    name: item.name,
+                    lang: item.lang,
+                    mediaId,
+                });
+                added += 1;
+            } catch (error) {
+                console.debug("内嵌字幕上传失败", error);
+            }
+        }
+        if (added) toast(`已识别 ${added} 条内嵌字幕`, "success");
+        return added;
+    })();
+}
+
+// MKV has no seek index for subtitles: finding the cue blocks means walking
+// every cluster, so this only runs for local files and only when the header
+// says there is a text track worth reading.
+async function extractMkvSubtitles(session, mediaId, file) {
+    const mkv = window.HallMkv;
+    if (!mkv) return;
+    let header = null;
+    try {
+        header = await mkv.analyze(file);
+    } catch (error) {
+        console.debug("MKV 头部解析失败", error);
+        return;
+    }
+    if (!header) return;
+    mediaCodecInfo.set(mediaId, header.info);
+    const readable = header.info.subtitles.filter((item) => item.format);
+    if (!readable.length) return;
+    toast("正在解析 MKV 内嵌字幕…", "info");
+    let result = null;
+    let lastPercent = -1;
+    try {
+        result = await mkv.scan(file, {
+            onProgress: (ratio) => {
+                const percent = Math.round(ratio * 100);
+                if (ratio >= 1 || percent === lastPercent) return;
+                lastPercent = percent;
+                toast(`正在解析 MKV 内嵌字幕… ${percent}%`, "info");
+            },
+        });
+    } catch (error) {
+        console.debug("MKV 内嵌字幕解析失败", error);
+        return;
+    }
+    if (!result || !result.tracks.length) {
+        toast("这个 MKV 里没有可提取的文字字幕", "info");
+        return;
+    }
+    await uploadEmbeddedTracks(session, mediaId, result.tracks);
+}
 
 async function extractEmbeddedSubtitles(session, mediaId, media, source) {
     const lib = window.HallEmbeddedSubs;
-    if (!lib || !session || !session.host_token || !mediaId || !media) return;
-    if (!lib.isMp4Media(media)) return;
+    if (!session || !session.host_token || !mediaId || !media) return;
     if (embeddedSubsScanned.has(mediaId)) return;
     embeddedSubsScanned.add(mediaId);
-    let tracks = [];
+    // MKV is only reachable as a local file: a URL item would have to be pulled
+    // down in full to find its cues.
+    if (window.HallMkv && window.HallMkv.isMkvMedia(media) && source && source.file) {
+        await extractMkvSubtitles(session, mediaId, source.file);
+        return;
+    }
+    if (!lib || !lib.isMp4Media(media)) return;
+    let parsed = null;
     try {
-        tracks = await lib.extractSubtitles(source);
+        parsed = await lib.extractSubtitles(source);
     } catch (error) {
         console.debug("内嵌字幕解析失败", error);
         return;
     }
-    if (!tracks.length) return;
-    let added = 0;
-    for (const item of tracks) {
-        try {
-            const blob = new Blob([item.vtt], { type: "text/vtt;charset=utf-8" });
-            await uploadSubtitle(session, blob, {
-                name: item.name,
-                lang: item.lang,
-                mediaId,
-            });
-            added += 1;
-        } catch (error) {
-            console.debug("内嵌字幕上传失败", error);
-        }
-    }
-    if (added) toast(`已识别 ${added} 条内嵌字幕`, "success");
+    if (!parsed) return;
+    if (parsed.info && !mediaCodecInfo.has(mediaId)) mediaCodecInfo.set(mediaId, parsed.info);
+    if (!parsed.tracks || !parsed.tracks.length) return;
+    await uploadEmbeddedTracks(session, mediaId, parsed.tracks);
 }
 
 function setButtonsBusy(button, busy, label) {
@@ -276,7 +333,7 @@ function setKind(kind) {
 
 function validateHostFile(file) {
     if (!file) return "没有选择文件";
-    if (!isLikelyVideo(file)) return "请选择浏览器可播放的视频文件（mp4 / webm / mov 等）";
+    if (!isLikelyVideo(file)) return "请选择浏览器可播放的视频文件（mp4 / webm / mkv 等）";
     if (file.size <= 0) return "文件为空，无法播放";
     if (file.size > MAX_HOST_FILE_BYTES) return "文件超过 64GB，暂不支持";
     return null;
@@ -879,6 +936,69 @@ function persistHostSession() {
     }
 }
 
+// -- host playback failures ------------------------------------------
+// A file the browser cannot decode leaves a black player.  Say which codec is
+// at fault and keep it on screen until the host switches to something else.
+function hostPlaybackMessage(detail) {
+    const code = detail && detail.code ? detail.code : 0;
+    const media = (hostRoomState && hostRoomState.media) || (state.room && state.room.media) || null;
+    const info = media && media.media_id ? mediaCodecInfo.get(media.media_id) : null;
+    const codecHint = info && window.HallMkv ? window.HallMkv.describeUnsupported(info) : null;
+    if (codecHint) return codecHint;
+    if (code === 4) {
+        if (media && media.kind === "url") {
+            return "这个视频地址打不开，可能已失效或对方不允许读取，请检查地址后重试。";
+        }
+        return "浏览器无法解码这个文件。常见原因是 H.265/HEVC 视频或 AC3/DTS 音轨，建议转成 MP4（H.264 视频 + AAC 音轨）后再播放。";
+    }
+    if (code === 2) return "读取文件时出错，请确认文件还在原来的位置、没有被移动或删除。";
+    if (code === 3) return "视频解码失败，文件可能已损坏，或者编码不被浏览器支持。";
+    if (code === 1) return "播放被中止了，请重新选择这个视频试试。";
+    return "浏览器加载这个文件时出错，请确认文件完整、格式可被浏览器播放。";
+}
+
+// The failure can land before the codec scan has finished; re-read the header
+// and replace the generic text once we know what is really in the file.
+async function refineHostError() {
+    const media = (hostRoomState && hostRoomState.media) || (state.room && state.room.media) || null;
+    if (!media || !media.media_id || mediaCodecInfo.has(media.media_id)) return;
+    if (!window.HallMkv) return;
+    const file = state.playlistFiles.get(media.media_id);
+    if (!file) return;
+    let header = null;
+    try {
+        header = await window.HallMkv.analyze(file);
+    } catch (error) {
+        return;
+    }
+    if (!header) return;
+    mediaCodecInfo.set(media.media_id, header.info);
+    const hint = window.HallMkv.describeUnsupported(header.info);
+    const overlay = $("host-error");
+    const label = $("host-error-text");
+    if (!hint || !overlay || !label || overlay.classList.contains("hidden")) return;
+    const current = (hostRoomState && hostRoomState.media) || (state.room && state.room.media) || null;
+    if (!current || current.media_id !== media.media_id) return;
+    label.textContent = hint;
+}
+
+function showHostError(text) {
+    const overlay = $("host-error");
+    const label = $("host-error-text");
+    if (!overlay || !label) {
+        toast(text, "error");
+        return;
+    }
+    label.textContent = text;
+    overlay.classList.remove("hidden");
+    toast(text, "error");
+}
+
+function hideHostError() {
+    const overlay = $("host-error");
+    if (overlay) overlay.classList.add("hidden");
+}
+
 function startHost(session, file, room) {
     if (state.host) {
         state.host.stop();
@@ -918,7 +1038,15 @@ function startHost(session, file, room) {
         },
         onMembers: (members) => updateHostMembers(members),
         onRoomState: (roomState) => applyHostRoomState(roomState),
-        onError: (message) => toast(message, "error"),
+        onError: (message, detail) => {
+            if (detail && detail.kind === "media") {
+                showHostError(hostPlaybackMessage(detail));
+                refineHostError();
+            } else {
+                toast(message, "error");
+            }
+        },
+        onLoaded: () => hideHostError(),
         onEnded: () => handleHostEnded(),
         onMetrics: ({ buffered }) => {
             $("host-buffered").textContent = fmtBytes(buffered);
@@ -1628,6 +1756,8 @@ function wire() {
             $("host-current").textContent = fmtTime(video.currentTime || 0);
             $("host-duration").textContent = fmtTime(duration);
         };
+
+        $("host-error-close")?.addEventListener("click", () => hideHostError());
 
         playButton.addEventListener("click", () => {
             if (!state.host) return;

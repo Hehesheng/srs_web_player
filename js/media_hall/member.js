@@ -376,6 +376,19 @@ export class MemberController {
             );
             return;
         }
+        const reason = video.error && video.error.message ? video.error.message : "";
+        if (code === 4 && /NO_SUPPORTED_STREAMS/i.test(reason)) {
+            // The bytes arrived but nothing inside can be decoded; retrying
+            // cannot help, so point at the cause instead.
+            this.onOverlay(
+                "media",
+                "这个视频的编码无法解码（常见是 H.265/HEVC 视频或 AC3/DTS 音轨），可以请房主转成 MP4（H.264 + AAC）后再播放",
+                null,
+                null
+            );
+            this.onError("视频编码不受支持（错误码 4）");
+            return;
+        }
         this.onOverlay(
             "media",
             "视频加载失败，可能是房主离线或网络中断",

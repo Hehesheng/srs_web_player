@@ -115,9 +115,9 @@
 
                     <div id="file-fields">
                         <label class="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">选择视频（可多选）</label>
-                        <input id="create-file" type="file" multiple accept="video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.m4v,.mov"
+                        <input id="create-file" type="file" multiple accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-matroska,.mp4,.webm,.m4v,.mov,.mkv"
                             class="mb-2 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-3 text-sm text-slate-300">
-                        <p class="text-[11px] text-slate-500">不选文件也可以先创建房间，之后再往播放列表里添加。房主标签页需要保持打开。</p>
+                        <p class="text-[11px] text-slate-500">支持 MP4 / WebM / MKV。MKV 里若是 H.265、AC3 这类 Chrome 解不了的编码，播放时会直接提示。不选文件也可以先创建房间，之后再往播放列表里添加。房主标签页需要保持打开。</p>
                     </div>
 
                     <div id="url-fields" class="hidden">
@@ -199,6 +199,12 @@
             <div id="host-shell" class="host-shell glass-card group relative overflow-hidden rounded-3xl bg-black">
                 <video id="host-video" playsinline class="max-h-[72vh] w-full object-contain"></video>
 
+                <div id="host-error" class="absolute inset-0 hidden flex flex-col items-center justify-center gap-3 bg-slate-950/90 p-6 text-center backdrop-blur-sm">
+                    <div class="text-sm font-semibold text-rose-200">这个视频无法播放</div>
+                    <div id="host-error-text" class="max-w-[24rem] text-xs leading-relaxed text-slate-300"></div>
+                    <button id="host-error-close" class="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] text-slate-300 transition hover:bg-white/10">知道了</button>
+                </div>
+
                 <div class="host-controls pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                     <div class="pointer-events-auto mb-2 flex items-center gap-3">
                         <span id="host-current" class="min-w-[40px] font-mono text-[10px] text-slate-300">00:00</span>
@@ -269,7 +275,7 @@
                                 </button>
                             </div>
                         </div>
-                        <input id="host-media-files" type="file" multiple accept="video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.m4v,.mov" class="hidden">
+                        <input id="host-media-files" type="file" multiple accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-matroska,.mp4,.webm,.m4v,.mov,.mkv" class="hidden">
                     </div>
                 </div>
                 <div id="host-add-url" class="mt-3 hidden flex-col gap-2 sm:flex-row sm:items-center">
@@ -354,7 +360,7 @@
                 <video id="member-video" playsinline webkit-playsinline class="max-h-[78vh] w-full object-contain"></video>
 
                 <div id="member-overlay" class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-slate-950/85 backdrop-blur-sm">
-                    <div class="text-sm text-slate-300" id="member-overlay-text">等待房主开始播放…</div>
+                    <div class="max-w-[22rem] px-6 text-center text-sm leading-relaxed text-slate-300" id="member-overlay-text">等待房主开始播放…</div>
                     <button id="member-play-btn" class="hidden rounded-xl bg-sky-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-sky-900/40 transition hover:bg-sky-400">点击播放</button>
                 </div>
 
@@ -413,6 +419,7 @@
 
     <script src="vendor/mp4box.all.min.js"></script>
     <script src="js/media_hall/embedded_subs.js"></script>
+    <script src="js/media_hall/mkv.js"></script>
     <script type="module" src="js/media_hall/main.js"></script>
 </body>
 </html>
