@@ -68,10 +68,14 @@
         /* Narrow screens do not fit mute + slider + subtitle pickers + PiP, so
            the slider gives way and the buttons keep their spacing. */
         @media (max-width: 640px) {
-            .member-controls,
-            .host-controls { padding: 0.5rem 0.75rem; }
+            body .member-controls,
+            body .host-controls { padding: 0.5rem 0.5rem; }
             .member-controls > div,
             .host-controls > div { gap: 0.4rem; }
+            /* The two button groups wrap onto a second line rather than run off
+               the player on a phone. */
+            .member-controls > div:last-child,
+            .host-controls > div:last-child { flex-wrap: wrap; row-gap: 0.35rem; }
             #member-volume,
             #host-volume { display: none; }
         }
@@ -210,7 +214,6 @@
                         <span id="host-room-code" class="font-mono text-sm font-bold tracking-[0.2em] text-sky-300">------</span>
                         <button id="btn-copy-link" class="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制链接</button>
                     </div>
-                    <button id="btn-wide-mode" class="rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300" aria-pressed="false" title="播放器铺满窗口并收起下方卡片（ESC 退出）">宽屏</button>
                     <button id="btn-end-room" class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-bold text-rose-300 transition hover:bg-rose-500/20">结束房间</button>
                 </div>
             </div>
@@ -271,6 +274,9 @@
                             </div>
                             <button id="btn-host-pip" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="浮窗播放">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/></svg>
+                            </button>
+                            <button id="btn-wide-mode" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="宽屏：播放器铺满窗口，隐藏下方卡片（ESC 退出）" aria-pressed="false">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><path d="m17 8 4 4-4 4"/></svg>
                             </button>
                             <button id="btn-host-fullscreen" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
@@ -378,7 +384,6 @@
                     </span>
                     <span>D <span id="member-d" class="font-mono text-slate-300">0.5s</span></span>
                     <span>倍速 <span id="member-rate" class="font-mono text-slate-300">1.00x</span></span>
-                    <button id="btn-wide-mode-member" class="rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-1.5 text-[10px] font-bold text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-300" aria-pressed="false" title="播放器铺满窗口并收起下方卡片（ESC 退出）">宽屏</button>
                 </div>
             </div>
 
@@ -390,8 +395,20 @@
                     <button id="member-play-btn" class="hidden rounded-xl bg-sky-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-sky-900/40 transition hover:bg-sky-400">点击播放</button>
                 </div>
 
-                <div class="member-controls pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                    <div class="pointer-events-auto flex items-center gap-3">
+                <div class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-white/15">
+                    <div id="member-progress-line" class="h-full w-0 bg-sky-400"></div>
+                </div>
+
+                <div class="member-controls pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                    <div class="mb-2 flex items-center gap-3">
+                        <span id="member-current" class="min-w-[40px] font-mono text-[10px] text-slate-300">00:00</span>
+                        <div class="h-1 flex-1 overflow-hidden rounded-full bg-white/20" role="progressbar" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="member-progress">
+                            <div id="member-progress-fill" class="h-full w-0 rounded-full bg-sky-400 transition-[width] duration-150 ease-linear"></div>
+                        </div>
+                        <span id="member-duration" class="min-w-[40px] text-right font-mono text-[10px] text-slate-300">00:00</span>
+                    </div>
+                    <div class="flex items-end justify-between">
+                        <div class="pointer-events-auto flex items-center gap-3">
                         <button id="btn-mute" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="静音">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                         </button>
@@ -408,14 +425,18 @@
                             <option value="medium" selected>中</option>
                             <option value="large">大</option>
                         </select>
-                    </div>
-                    <div class="pointer-events-auto flex items-center gap-2">
-                        <button id="btn-pip" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="浮窗播放">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/></svg>
-                        </button>
-                        <button id="btn-fullscreen" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
-                        </button>
+                        </div>
+                        <div class="pointer-events-auto flex items-center gap-2">
+                            <button id="btn-pip" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="浮窗播放">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 9V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4"/><rect width="10" height="7" x="12" y="13" rx="2"/></svg>
+                            </button>
+                            <button id="btn-wide-mode-member" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="宽屏：播放器铺满窗口，隐藏下方卡片（ESC 退出）" aria-pressed="false">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><path d="m17 8 4 4-4 4"/></svg>
+                            </button>
+                            <button id="btn-fullscreen" class="rounded-lg bg-white/10 p-2 text-slate-200 backdrop-blur transition hover:bg-white/20" title="全屏">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>

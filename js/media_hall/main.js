@@ -1339,10 +1339,11 @@ function applyWideMode() {
         const button = $(id);
         if (!button) continue;
         button.setAttribute("aria-pressed", on ? "true" : "false");
-        button.textContent = on ? "退出宽屏" : "宽屏";
         button.classList.toggle("text-sky-300", on);
-        button.classList.toggle("text-slate-300", !on);
-        button.title = on ? "恢复常规排版（ESC）" : "播放器铺满窗口并收起下方卡片（ESC 退出）";
+        button.classList.toggle("text-slate-200", !on);
+        button.title = on
+            ? "退出宽屏，恢复常规排版（ESC）"
+            : "宽屏：播放器铺满窗口，隐藏下方卡片（ESC 退出）";
     }
 }
 
@@ -1849,6 +1850,31 @@ function wire() {
         sync();
     };
     wirePictureInPicture($("member-video"), $("btn-pip"));
+
+    // Members are read-only, but they still want to see where the room is: the
+    // bar shows a plain progress track instead of a draggable slider.
+    (() => {
+        const video = $("member-video");
+        const fill = $("member-progress-fill");
+        const line = $("member-progress-line");
+        const bar = $("member-progress");
+        const current = $("member-current");
+        const duration = $("member-duration");
+        const sync = () => {
+            const total = Number.isFinite(video.duration) ? video.duration : 0;
+            const position = Number(video.currentTime) || 0;
+            const percent = total > 0 ? Math.min(100, Math.max(0, (position / total) * 100)) : 0;
+            fill.style.width = `${percent.toFixed(2)}%`;
+            line.style.width = `${percent.toFixed(2)}%`;
+            bar.setAttribute("aria-valuenow", String(Math.round(percent)));
+            current.textContent = fmtTime(position);
+            duration.textContent = fmtTime(total);
+        };
+        for (const name of ["timeupdate", "loadedmetadata", "durationchange", "emptied", "seeked", "ended"]) {
+            video.addEventListener(name, sync);
+        }
+        sync();
+    })();
 
     // The host video has no native controls: it uses the same bar as members.
     (() => {
