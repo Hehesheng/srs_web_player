@@ -1907,36 +1907,56 @@ function wire() {
 
         $("host-error-close")?.addEventListener("click", () => hideHostError());
 
-        // Left/right scrub the host timeline; the seek reaches members through
-        // the usual "seeked" broadcast, so no extra plumbing is needed.
-        const seekFlash = $("host-seek-flash");
-        let seekFlashTimer = 0;
-        const flashSeek = (seconds) => {
-            if (!seekFlash) return;
-            seekFlash.textContent = seconds < 0 ? `回退 ${Math.abs(seconds)} 秒` : `快进 ${seconds} 秒`;
-            seekFlash.classList.remove("hidden");
-            clearTimeout(seekFlashTimer);
-            seekFlashTimer = window.setTimeout(() => seekFlash.classList.add("hidden"), 700);
+        // Left/right scrub the timeline and up/down set the volume.  A seek
+        // reaches members through the usual "seeked" broadcast; volume stays
+        // local to this tab.
+        const keyHint = $("host-key-hint");
+        let keyHintTimer = 0;
+        const flashHint = (text) => {
+            if (!keyHint) return;
+            keyHint.textContent = text;
+            keyHint.classList.remove("hidden");
+            clearTimeout(keyHintTimer);
+            keyHintTimer = window.setTimeout(() => keyHint.classList.add("hidden"), 700);
         };
-        document.addEventListener("keydown", (event) => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            if (event.ctrlKey || event.metaKey || event.altKey) return;
-            if (!state.host || $("view-host").classList.contains("hidden")) return;
-            const target = event.target;
-            // Leaves the volume/seek sliders and any text field to their own keys.
-            if (target && target.closest && target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+        const seekBy = (seconds) => {
             const duration = Number.isFinite(video.duration) ? video.duration : 0;
-            if (!duration || !video.getAttribute("src")) return;
-            const step = event.key === "ArrowRight" ? 5 : -5;
-            event.preventDefault();
-            const next = Math.min(Math.max((video.currentTime || 0) + step, 0), duration);
+            if (!duration) return;
+            const next = Math.min(Math.max((video.currentTime || 0) + seconds, 0), duration);
             try {
                 video.currentTime = next;
             } catch {
                 return;
             }
             syncTimeline();
-            flashSeek(step);
+            flashHint(seconds < 0 ? `回退 ${Math.abs(seconds)} 秒` : `快进 ${seconds} 秒`);
+        };
+        const setVolumeBy = (step) => {
+            // Raising the volume always unmutes: otherwise the first press
+            // would appear to do nothing.
+            const from = video.muted ? 0 : video.volume;
+            const next = Math.min(1, Math.max(0, Number((from + step).toFixed(2))));
+            video.volume = next;
+            video.muted = next === 0;
+            if (next > 0) lastVolume = next;
+            volume.value = String(Math.round(next * 100));
+            syncVolumeIcon();
+            flashHint(next === 0 ? "静音" : `音量 ${Math.round(next * 100)}%`);
+        };
+        document.addEventListener("keydown", (event) => {
+            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (!state.host || $("view-host").classList.contains("hidden")) return;
+            const target = event.target;
+            // Leaves the volume/seek sliders and any text field to their own keys.
+            if (target && target.closest && target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+            if (!video.getAttribute("src")) return;
+            event.preventDefault();
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                setVolumeBy(event.key === "ArrowUp" ? 0.1 : -0.1);
+                return;
+            }
+            seekBy(event.key === "ArrowRight" ? 5 : -5);
         });
 
         playButton.addEventListener("click", () => {
