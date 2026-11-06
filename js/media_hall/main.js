@@ -1818,6 +1818,36 @@ function wire() {
         if (value > 0) memberVolume = value;
         syncMemberMute();
     });
+    // Up/down set this viewer's own volume.  It never leaves the tab, so it is
+    // safe to offer where seeking is not.
+    const memberHint = $("member-key-hint");
+    let memberHintTimer = 0;
+    const flashMemberHint = (text) => {
+        if (!memberHint) return;
+        memberHint.textContent = text;
+        memberHint.classList.remove("hidden");
+        clearTimeout(memberHintTimer);
+        memberHintTimer = window.setTimeout(() => memberHint.classList.add("hidden"), 700);
+    };
+    document.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if ($("view-member").classList.contains("hidden")) return;
+        const target = event.target;
+        if (target && target.closest && target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+        const video = $("member-video");
+        if (!video.getAttribute("src")) return;
+        event.preventDefault();
+        const from = video.muted ? 0 : video.volume;
+        const next = Math.min(1, Math.max(0, Number((from + (event.key === "ArrowUp" ? 0.1 : -0.1)).toFixed(2))));
+        video.volume = next;
+        video.muted = next === 0;
+        if (next > 0) memberVolume = next;
+        $("member-volume").value = String(Math.round(next * 100));
+        syncMemberMute();
+        flashMemberHint(next === 0 ? "静音" : `音量 ${Math.round(next * 100)}%`);
+    });
+
     $("btn-fullscreen").addEventListener("click", async () => {
         const shell = $("member-shell");
         try {

@@ -451,8 +451,10 @@ export class MemberController {
         this.keyHandler = (event) => {
             const target = event.target;
             if (target && target.closest && target.closest("input, textarea, select, button, a")) return;
+            // Up and down are left alone: they adjust this viewer's own volume
+            // and cannot disturb the room.
             const blocked = [
-                " ", "Spacebar", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+                " ", "Spacebar", "ArrowLeft", "ArrowRight",
                 "Home", "End", "PageUp", "PageDown",
                 "j", "J", "l", "L", ",", ".", "<", ">",
             ];
