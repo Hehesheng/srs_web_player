@@ -4,6 +4,7 @@
  */
 
 import { HostController } from "./host.js";
+import { JellyfinPicker } from "./jellyfin.js";
 import { MemberController } from "./member.js";
 import { parseRoomRef } from "./protocol.js";
 import {
@@ -558,8 +559,21 @@ function updateHostMembers(members) {
 }
 
 // -- playlist --------------------------------------------------------
+// Transcodes have no byte size, so they are described by length instead.
+function mediaMeta(media) {
+    if (!media) return "";
+    const bits = [];
+    if (Number(media.duration) > 0) bits.push(fmtTime(Number(media.duration)));
+    if (Number(media.size) > 0) bits.push(fmtBytes(Number(media.size)));
+    if (media.playback_mode === "hls") bits.push("转码");
+    else if (media.kind === "jellyfin") bits.push("Jellyfin");
+    return bits.join(" · ");
+}
+
 function hostMediaLabel(media) {
-    return media ? `${media.name} · ${fmtBytes(media.size)}` : "播放列表为空";
+    if (!media) return "播放列表为空";
+    const meta = mediaMeta(media);
+    return meta ? `${media.name} · ${meta}` : media.name;
 }
 
 function updateHostMediaLabel(media) {
@@ -595,7 +609,7 @@ function renderHostPlaylist() {
         title.textContent = `${index + 1}. ${item.name || "视频"}`;
         const meta = document.createElement("div");
         meta.className = "mt-0.5 text-[10px] text-slate-500";
-        meta.textContent = [item.active ? "播放中" : "", fmtBytes(item.size || 0)]
+        meta.textContent = [item.active ? "播放中" : "", mediaMeta(item)]
             .filter(Boolean)
             .join(" · ");
         left.append(title, meta);
@@ -633,6 +647,53 @@ function applyHostPlaylistPayload(data) {
     if (!data) return;
     if (Array.isArray(data.playlist)) setHostPlaylist(data.playlist);
     if ("media" in data) updateHostMediaLabel(data.media);
+    // The playlist response carries the room snapshot; taking the stream
+    // details from it lets the switch start before the websocket catches up.
+    noteStream(data.room, data.media_url);
+}
+
+// The transcoder's epoch names one continuous stream.  A seek bumps it, and
+// every player then has to follow the new one instead of the dead old stream.
+let hostAttachedEpoch = -1;
+// Where the room's current stream starts, kept fresh from every payload that
+// carries it so a switch never has to wait for a websocket round trip.
+const hostStream = { epoch: 0, start: 0, url: null };
+
+function noteStream(fields, url) {
+    if (!fields) return;
+    if (fields.media_epoch !== undefined) hostStream.epoch = Number(fields.media_epoch) || 0;
+    if (fields.media_start !== undefined) {
+        hostStream.start = Math.max(0, Number(fields.media_start) || 0);
+    }
+    if (url !== undefined) hostStream.url = url;
+}
+
+function roomMediaStart() {
+    return hostStream.start;
+}
+
+function roomMediaEpoch() {
+    return hostStream.epoch;
+}
+
+// Ask the server to restart the transcode at `position`.  The restart bumps the
+// epoch, and followHostStream() picks the new stream up from there; repeated
+// calls are cheap because the server keeps only the last target.
+async function requestHlsSeek(position) {
+    const session = state.room;
+    if (!session || !state.host) return;
+    const duration = state.host.effectiveDuration();
+    let target = Math.max(0, Number(position) || 0);
+    if (duration > 1) target = Math.min(target, duration - 1);
+    try {
+        await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/hls/seek`, {
+            method: "POST",
+            headers: { "X-Host-Token": session.host_token },
+            body: { position: target },
+        });
+    } catch (error) {
+        toast(error.message || "跳转失败", "error");
+    }
 }
 
 function switchHostToMedia(media, mediaUrl) {
@@ -640,14 +701,26 @@ function switchHostToMedia(media, mediaUrl) {
     if (!host) return;
     if (!media) {
         host.clearMedia();
+        hostAttachedEpoch = -1;
         return;
     }
-    if (media.kind === "url") {
-        const url = mediaUrl || state.room.media_url;
+    if (media.playback_mode === "hls") {
+        // Server-side transcode: the browser gets a growing playlist whose
+        // clock starts wherever the transcode started, not at the item start.
+        host.switchHls(mediaUrl || hostStream.url || (state.room && state.room.media_url), {
+            start: roomMediaStart(),
+            duration: Number(media.duration) || 0,
+        });
+        hostAttachedEpoch = roomMediaEpoch();
+        return;
+    }
+    const url = mediaUrl || (state.room && state.room.media_url);
+    if (media.kind === "url" || media.kind === "jellyfin") {
         host.switchUrl(url);
+        hostAttachedEpoch = roomMediaEpoch();
         // A remote file can only be read through the relay while it plays, so
         // its subtitle tracks are picked up here rather than when it was added.
-        if (url && media.range_supported !== false) {
+        if (media.kind === "url" && url && media.range_supported !== false) {
             extractEmbeddedSubtitles(state.room, media.media_id, media, {
                 url,
                 size: media.size,
@@ -661,6 +734,7 @@ function switchHostToMedia(media, mediaUrl) {
         return;
     }
     host.switchFile(file, media.media_id);
+    hostAttachedEpoch = roomMediaEpoch();
 }
 
 async function addHostFiles(files) {
@@ -745,6 +819,49 @@ async function addHostUrl() {
     } finally {
         button.disabled = false;
         button.textContent = label;
+    }
+}
+
+let jellyfinPicker = null;
+
+function jellyfin() {
+    if (!jellyfinPicker) {
+        jellyfinPicker = new JellyfinPicker({
+            request,
+            getRoom: () => state.room,
+            toast,
+            onPick: (item) => addJellyfinItem(item),
+        });
+    }
+    return jellyfinPicker;
+}
+
+async function addJellyfinItem(item) {
+    const session = state.room;
+    if (!session || !state.host || !item) return;
+    try {
+        const data = await request(
+            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/playlist`,
+            {
+                method: "POST",
+                headers: { "X-Host-Token": session.host_token },
+                body: { kind: "jellyfin", item_id: item.id },
+            }
+        );
+        session.media = data.media;
+        session.media_url = data.media_url;
+        persistHostSession();
+        applyHostPlaylistPayload(data);
+        if (data.active) {
+            // The film is starting behind the picker, so get out of its way.
+            if (jellyfinPicker) jellyfinPicker.close();
+            switchHostToMedia(data.media, data.media_url);
+            state.host.play();
+        }
+        toast(`已添加「${item.name || "Jellyfin 影片"}」`, "success");
+    } catch (error) {
+        toast(error.message || "添加失败", "error");
+        throw error;
     }
 }
 
@@ -912,10 +1029,34 @@ function applyHostRoomState(roomState) {
     if (ts && ts < hostRoomStateTs) return;
     if (ts) hostRoomStateTs = ts;
     hostRoomState = roomState;
+    noteStream(roomState, roomState.media_url);
     if (Array.isArray(roomState.members)) updateHostMembers(roomState.members);
     if (Array.isArray(roomState.playlist)) setHostPlaylist(roomState.playlist);
     updateHostMediaLabel(roomState.media);
     renderHostSubtitles();
+    followHostStream();
+}
+
+// A restart means the old stream is finished: load the new one and pick the
+// host's own position back up.  Anything else just refreshes the clock offset.
+function followHostStream() {
+    const host = state.host;
+    const media = hostRoomState && hostRoomState.media;
+    if (!host || !media || media.playback_mode !== "hls") return;
+    const epoch = roomMediaEpoch();
+    const fresh = !host.isHls || (hostAttachedEpoch >= 0 && epoch !== hostAttachedEpoch);
+    if (!fresh) {
+        hostAttachedEpoch = epoch;
+        host.setHlsStart(roomMediaStart());
+        return;
+    }
+    const wasPlaying = host.isHls && !host.video.paused && !host.video.ended;
+    host.switchHls(hostStream.url, {
+        start: roomMediaStart(),
+        duration: Number(media.duration) || 0,
+    });
+    hostAttachedEpoch = epoch;
+    if (wasPlaying) host.play();
 }
 
 function sendHostSubtitleSelect(subtitleId, visible) {
@@ -1070,6 +1211,10 @@ function startHost(session, file, room) {
         state.playlistFiles.set(session.media.media_id, file);
     }
     state.playlist = [];
+    hostAttachedEpoch = -1;
+    noteStream(room, room && room.media_url);
+    session.media_start = hostStream.start;
+    if (jellyfinPicker) jellyfinPicker.reset();
 
     $("host-room-name").textContent = room && room.name ? room.name : session.name;
     updateHostMediaLabel(session.media);
@@ -1111,8 +1256,8 @@ function startHost(session, file, room) {
         onMetrics: ({ buffered }) => {
             $("host-buffered").textContent = fmtBytes(buffered);
         },
-        onProgress: ({ position, rate }) => {
-            $("host-position").textContent = fmtTime(position);
+        onProgress: ({ position, absolute, rate }) => {
+            $("host-position").textContent = fmtTime(absolute === undefined ? position : absolute);
             $("host-rate").textContent = `${Number(rate || 1).toFixed(2)}x`;
         },
         onClosed: ({ fatal, code }) => {
@@ -1720,7 +1865,14 @@ function wire() {
         });
         $("btn-add-url").addEventListener("click", () => {
             closeAddMenu();
+            showUrlRow(false);
+            jellyfin().showLogin(false);
             showUrlRow(true);
+        });
+        $("btn-add-jellyfin")?.addEventListener("click", () => {
+            closeAddMenu();
+            showUrlRow(false);
+            jellyfin().begin();
         });
         addMediaInput.addEventListener("change", () => {
             const files = Array.from(addMediaInput.files || []);
@@ -1891,8 +2043,17 @@ function wire() {
         const current = $("member-current");
         const duration = $("member-duration");
         const sync = () => {
-            const total = Number.isFinite(video.duration) ? video.duration : 0;
-            const position = Number(video.currentTime) || 0;
+            const controller = state.member && state.member.controller;
+            // A transcoded stream's clock starts where the transcode started,
+            // so the bar shows item time rather than stream time.
+            const offset = controller && controller.isHls ? controller.timeOffset : 0;
+            const total =
+                controller && controller.isHls && controller.mediaDuration > 0
+                    ? controller.mediaDuration
+                    : Number.isFinite(video.duration)
+                      ? video.duration
+                      : 0;
+            const position = (Number(video.currentTime) || 0) + offset;
             const percent = total > 0 ? Math.min(100, Math.max(0, (position / total) * 100)) : 0;
             fill.style.width = `${percent.toFixed(2)}%`;
             line.style.width = `${percent.toFixed(2)}%`;
@@ -1927,11 +2088,21 @@ function wire() {
         const syncVolumeIcon = () => {
             muteButton.classList.toggle("text-rose-300", video.muted || video.volume === 0);
         };
+        // The slider works in item time.  For a transcode that is the element
+        // clock plus wherever the stream started, which the controller owns.
+        const hostClock = () => {
+            const host = state.host;
+            if (host) return { position: host.absoluteTime(), duration: host.effectiveDuration() };
+            return {
+                position: video.currentTime || 0,
+                duration: Number.isFinite(video.duration) ? video.duration : 0,
+            };
+        };
         const syncTimeline = () => {
-            const duration = Number.isFinite(video.duration) ? video.duration : 0;
+            const { position, duration } = hostClock();
             seek.max = String(duration || 0);
-            if (!scrubbing) seek.value = String(video.currentTime || 0);
-            $("host-current").textContent = fmtTime(video.currentTime || 0);
+            if (!scrubbing) seek.value = String(position || 0);
+            $("host-current").textContent = fmtTime(position || 0);
             $("host-duration").textContent = fmtTime(duration);
         };
 
@@ -1949,16 +2120,26 @@ function wire() {
             clearTimeout(keyHintTimer);
             keyHintTimer = window.setTimeout(() => keyHint.classList.add("hidden"), 700);
         };
-        const seekBy = (seconds) => {
-            const duration = Number.isFinite(video.duration) ? video.duration : 0;
-            if (!duration) return;
-            const next = Math.min(Math.max((video.currentTime || 0) + seconds, 0), duration);
-            try {
-                video.currentTime = next;
-            } catch {
+        const seekTo = (target) => {
+            if (!state.host) return;
+            if (state.host.isHls) {
+                // A transcoded stream cannot be scrubbed locally: the server
+                // restarts it at the new position and everyone follows.
+                requestHlsSeek(target);
                 return;
             }
+            try {
+                video.currentTime = target;
+            } catch {
+                // ignore
+            }
             syncTimeline();
+        };
+        const seekBy = (seconds) => {
+            const { position, duration } = hostClock();
+            if (!duration) return;
+            const next = Math.min(Math.max((position || 0) + seconds, 0), duration);
+            seekTo(next);
             flashHint(seconds < 0 ? `回退 ${Math.abs(seconds)} 秒` : `快进 ${seconds} 秒`);
         };
         const setVolumeBy = (step) => {
@@ -2001,11 +2182,8 @@ function wire() {
         seek.addEventListener("change", () => {
             const target = Number(seek.value) || 0;
             scrubbing = false;
-            try {
-                video.currentTime = Math.min(target, video.duration || target);
-            } catch {
-                // ignore
-            }
+            const { duration } = hostClock();
+            seekTo(duration ? Math.min(target, duration) : target);
             syncTimeline();
         });
         muteButton.addEventListener("click", () => {

@@ -4,6 +4,7 @@
  * read-only: seeking, pausing and rate changes are rejected/hidden.
  */
 
+import { attachHls, detachHls } from "./hls.js";
 import { websocketUrl } from "./protocol.js";
 import { SyncController } from "./sync.js";
 
@@ -36,6 +37,13 @@ export class MemberController {
         this.onTokenInvalid = onTokenInvalid || (() => {});
         this.onMediaChanged = onMediaChanged || (() => {});
         this.mediaId = session && session.media && session.media.media_id ? session.media.media_id : null;
+        // Transcoded playback: the element's clock starts where the transcode
+        // starts, so item time needs an offset.  The epoch tells us when the
+        // host restarted the transcode after seeking.
+        this.isHls = false;
+        this.timeOffset = 0;
+        this.mediaDuration = 0;
+        this.mediaEpoch = null;
 
         this.ws = null;
         this.sync = null;
@@ -56,7 +64,10 @@ export class MemberController {
 
     start() {
         const video = this.video;
-        if (this.session.media_url) {
+        if (this.session.media_url && this.session.media && this.session.media.playback_mode === "hls") {
+            // Attached from the first room state: a URL kept from an earlier
+            // page load may belong to a transcode that has since restarted.
+        } else if (this.session.media_url) {
             video.src = this.session.media_url;
         } else {
             // The room exists but the host has not picked anything yet.
@@ -223,21 +234,55 @@ export class MemberController {
             this.mediaId = null;
             this.session.media = null;
             this.session.media_url = null;
+            this.mediaEpoch = null;
             if (previousId !== null || this.video.getAttribute("src")) this.clearMedia();
             return;
         }
         this.mediaId = media.media_id;
         if (room.media_url) this.session.media_url = room.media_url;
+        if (room.media_start !== undefined) this.session.media_start = room.media_start;
         this.session.media = media;
+
+        const epoch = Number(room.media_epoch) || 0;
+        const firstRoom = this.mediaEpoch === null;
+        const restarted = !firstRoom && epoch !== this.mediaEpoch;
+        this.mediaEpoch = epoch;
+
+        if (firstRoom && media.playback_mode === "hls") {
+            // Nothing is attached yet, and the room's URL is the only current
+            // one, so this is where the player joins the stream.
+            this.switchMedia();
+            this.onMediaChanged(media);
+            return;
+        }
         if (previousId === null) {
             // The player already loaded this source in start(); only an empty
             // room that just received its first item needs a switch here.
-            if (!this.video.getAttribute("src")) this.switchMedia();
+            if (!this.video.getAttribute("src") && !this.isHls) this.switchMedia();
+            else this.applyHlsTiming();
             return;
         }
-        if (previousId === media.media_id) return;
+        if (previousId === media.media_id) {
+            // The host restarted the transcoder: the old stream is gone, so
+            // follow them onto the new one.
+            if (restarted && media.playback_mode === "hls") {
+                this.switchMedia();
+                this.onMediaChanged(media);
+            } else {
+                this.applyHlsTiming();
+            }
+            return;
+        }
         this.switchMedia();
         this.onMediaChanged(media);
+    }
+
+    /** Keep the item-time offset in step with whatever the room reports. */
+    applyHlsTiming() {
+        const media = this.session.media;
+        if (!media || media.playback_mode !== "hls") return;
+        this.mediaDuration = Math.max(0, Number(media.duration) || 0);
+        this.timeOffset = Math.max(0, Number(this.session.media_start) || 0);
     }
 
     switchMedia() {
@@ -255,9 +300,35 @@ export class MemberController {
         } catch {
             // ignore
         }
-        video.src = this.session.media_url;
-        video.load();
+        if (this.session.media && this.session.media.playback_mode === "hls") {
+            this.attachHlsStream();
+        } else {
+            this.resetHlsState();
+            video.src = this.session.media_url;
+            video.load();
+        }
         this.onOverlay("media", null, null, null);
+    }
+
+    /** Play the room's shared transcode; the element clock is stream-relative. */
+    attachHlsStream() {
+        const media = this.session.media || {};
+        this.isHls = true;
+        this.mediaDuration = Math.max(0, Number(media.duration) || 0);
+        this.timeOffset = Math.max(0, Number(this.session.media_start) || 0);
+        attachHls(this.video, this.session.media_url, {
+            onError: () => {
+                this.onOverlay("media", "转码流已中断", "重试", () => this.retrySource());
+                this.onError("转码流出错，请点击重试");
+            },
+        });
+    }
+
+    resetHlsState() {
+        if (this.isHls) detachHls(this.video);
+        this.isHls = false;
+        this.timeOffset = 0;
+        this.mediaDuration = 0;
     }
 
     clearMedia() {
@@ -270,6 +341,7 @@ export class MemberController {
         } catch {
             // ignore
         }
+        this.resetHlsState();
         this.video.removeAttribute("src");
         try {
             this.video.load();
@@ -401,11 +473,17 @@ export class MemberController {
     retrySource() {
         const video = this.video;
         const source = this.session.media_url;
-        video.removeAttribute("src");
-        video.load();
-        video.src = source;
-        video.load();
-        this.onOverlay("media", null, null, null);
+        if (this.isHls) {
+            if (this.sync) this.sync.resetForMedia();
+            this.attachHlsStream();
+            this.onOverlay("media", null, null, null);
+        } else {
+            video.removeAttribute("src");
+            video.load();
+            video.src = source;
+            video.load();
+            this.onOverlay("media", null, null, null);
+        }
         if (this.sync && this.sync.host) {
             this.sync.pendingInitialSeek = true;
             if (this.sync.shouldPlay()) {
@@ -430,6 +508,7 @@ export class MemberController {
     stopPlayback() {
         clearInterval(this.statusTimer);
         if (this.sync) this.sync.destroy();
+        this.resetHlsState();
         try {
             this.video.pause();
         } catch {
@@ -499,6 +578,7 @@ export class MemberController {
 
     destroy() {
         this.closedByUser = true;
+        this.resetHlsState();
         clearTimeout(this.reconnectTimer);
         clearTimeout(this.authTimer);
         clearInterval(this.statusTimer);

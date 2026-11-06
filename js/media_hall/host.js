@@ -3,6 +3,7 @@
  * the worker that serves byte ranges to the server.
  */
 
+import { attachHls, detachHls } from "./hls.js";
 import { websocketUrl } from "./protocol.js";
 
 const HEARTBEAT_PLAYING_MS = 250;
@@ -33,6 +34,34 @@ export class HostController {
         this.timer = null;
         this.listeners = [];
         this.onVisibility = null;
+        // Transcoded playback runs on a stream that starts partway through the
+        // item, so the element's own clock has to be shifted to get item time.
+        this.isHls = false;
+        this.timeOffset = 0;
+        this.mediaDuration = 0;
+    }
+
+    /** The element's clock is stream-relative; callers want item time. */
+    absoluteTime() {
+        return this.timeOffset + (Number(this.video.currentTime) || 0);
+    }
+
+    effectiveDuration() {
+        if (this.isHls && this.mediaDuration > 0) return this.mediaDuration;
+        return Number.isFinite(this.video.duration) ? this.video.duration : 0;
+    }
+
+    progressSnapshot(overrides = {}) {
+        const video = this.video;
+        return {
+            position: Number(video.currentTime) || 0,
+            absolute: this.absoluteTime(),
+            duration: this.effectiveDuration(),
+            rate: Number(video.playbackRate) || 1,
+            paused: video.paused || video.ended,
+            waiting: this.waiting,
+            ...overrides,
+        };
     }
 
     start() {
@@ -40,6 +69,9 @@ export class HostController {
         if (this.file) {
             this.objectUrl = URL.createObjectURL(this.file);
             video.src = this.objectUrl;
+        } else if (this.session.media && this.session.media.playback_mode === "hls") {
+            // Attached from the first room state instead: a URL kept from a
+            // previous page load may belong to a transcode that has restarted.
         } else if (this.session.media_url) {
             // URL rooms are relayed by the server; the host plays the same
             // signed media URL as members so it remains the timing authority.
@@ -132,7 +164,7 @@ export class HostController {
         document.addEventListener("visibilitychange", this.onVisibility);
 
         this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_PLAYING_MS);
-        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
+        this.onProgress(this.progressSnapshot({ paused: true, waiting: false, position: 0 }));
     }
 
     heartbeat() {
@@ -148,13 +180,7 @@ export class HostController {
     }
 
     emitProgress() {
-        const video = this.video;
-        this.onProgress({
-            position: Number(video.currentTime) || 0,
-            rate: Number(video.playbackRate) || 1,
-            paused: video.paused || video.ended,
-            waiting: this.waiting,
-        });
+        this.onProgress(this.progressSnapshot());
     }
 
     sendState(isSeek) {
@@ -168,12 +194,14 @@ export class HostController {
             type: isSeek ? "seek" : "state",
             payload: {
                 seq: this.seq,
+                // Stream-relative on purpose: members are watching the same
+                // transcode, so they compare against their own element clock.
                 position: Number(position.toFixed(3)),
                 rate: Number((Number(video.playbackRate) || 1).toFixed(3)),
                 playing,
                 buffering,
                 background: document.visibilityState === "hidden",
-                duration: Number.isFinite(video.duration) ? Number(video.duration.toFixed(3)) : 0,
+                duration: Number(this.effectiveDuration().toFixed(3)),
             },
         });
     }
@@ -190,6 +218,7 @@ export class HostController {
     // -- media swap ----------------------------------------------------
     /** Swap the locally played file while the room and its socket stay alive. */
     switchFile(file, mediaId = null) {
+        this.resetHlsState();
         this.file = file;
         if (this.worker) this.worker.postMessage({ type: "file", file, mediaId });
 
@@ -208,11 +237,12 @@ export class HostController {
         video.src = this.objectUrl;
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
+        this.onProgress(this.progressSnapshot({ paused: true, waiting: false, position: 0 }));
     }
 
     /** Switch to a server-relayed URL item (url rooms and url playlist items). */
     switchUrl(url) {
+        this.resetHlsState();
         this.file = null;
         if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
 
@@ -232,11 +262,58 @@ export class HostController {
         else video.removeAttribute("src");
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
+        this.onProgress(this.progressSnapshot({ paused: true, waiting: false, position: 0 }));
+    }
+
+    /** Switch to a Jellyfin transcode: a live playlist, not a fixed file. */
+    switchHls(url, { start = 0, duration = 0 } = {}) {
+        this.resetHlsState();
+        this.loadHls(url, { start, duration, restart: true });
+    }
+
+    /**
+     * Attach a transcoded stream.  `start` is where in the item the stream
+     * begins, which is only zero for the first transcode of an item.
+     */
+    loadHls(url, { start = 0, duration = 0, restart = false } = {}) {
+        this.file = null;
+        if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
+        this.isHls = true;
+        this.timeOffset = Math.max(0, Number(start) || 0);
+        this.mediaDuration = Math.max(0, Number(duration) || 0);
+        this.objectUrl = null;
+        this.ready = false;
+        this.waiting = true;
+        this.mediaEnded = false;
+        if (restart) this.seq = (this.seq + 1) >>> 0;
+        try {
+            this.video.pause();
+        } catch {
+            // ignore
+        }
+        attachHls(this.video, url, {
+            onError: () => this.onError("转码流已中断，正在重新连接", { kind: "hls" }),
+        });
+        this.onProgress(this.progressSnapshot({ paused: true, waiting: true, position: 0 }));
+    }
+
+    /** Drop HLS bookkeeping before playing something else. */
+    resetHlsState() {
+        if (this.isHls) detachHls(this.video);
+        this.isHls = false;
+        this.timeOffset = 0;
+        this.mediaDuration = 0;
+    }
+
+    /** The transcode advanced the stream start (a seek); keep item time right. */
+    setHlsStart(start) {
+        if (!this.isHls) return;
+        this.timeOffset = Math.max(0, Number(start) || 0);
     }
 
     /** Drop the current media when the playlist becomes empty. */
     clearMedia() {
+        this.resetHlsState();
         this.file = null;
         if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
 
@@ -258,7 +335,7 @@ export class HostController {
             // ignore
         }
         if (previousUrl) URL.revokeObjectURL(previousUrl);
-        this.onProgress({ position: 0, rate: Number(video.playbackRate) || 1, paused: true, waiting: false });
+        this.onProgress(this.progressSnapshot({ paused: true, waiting: false, position: 0 }));
     }
 
     play() {
@@ -337,6 +414,7 @@ export class HostController {
         } catch {
             // ignore
         }
+        this.resetHlsState();
         this.video.removeAttribute("src");
         try {
             this.video.load();
