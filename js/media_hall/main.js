@@ -28,6 +28,7 @@ const SUBTITLE_TRACK_FLAG = "hallSubtitle";
 const SUBTITLE_TRACK_SELECTOR = "track[data-hall-subtitle]";
 const SUBTITLE_SIZE_KEY = "hall_subtitle_size";
 const SUBTITLE_SIZE_CLASSES = ["cue-small", "cue-medium", "cue-large"];
+const WIDE_MODE_KEY = "hall_wide_mode";
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
@@ -41,6 +42,7 @@ let memberSubtitleChoice = null;
 let memberSubtitleHostId = null;
 let memberSubtitleHostVisible = true;
 let memberSubtitleMenuSignature = "";
+let wideMode = false;
 
 const state = {
     kind: "host_file",
@@ -1081,7 +1083,7 @@ function startHost(session, file, room) {
     setHostPlaylist((room && room.playlist) || []);
     renderHostSubtitles();
     setStatusBadge("host-status", "等待连接", "muted");
-    showView("host");
+    changeView("host");
 
     const host = new HostController({
         video: $("host-video"),
@@ -1181,7 +1183,7 @@ async function endCurrentRoom() {
     }
     window.history.replaceState({}, "", window.location.pathname);
     setButtonsBusy(button, false);
-    showView("landing");
+    changeView("landing");
     refreshRoomList();
     toast("房间已结束", "success");
 }
@@ -1312,6 +1314,51 @@ function setSubtitleSize(size) {
     } catch {
         // ignore
     }
+}
+
+// -- wide mode -------------------------------------------------------
+// A page-level layout switch rather than fullscreen: the player takes the
+// whole window and the accessory cards below fold away. Remembered per browser.
+function storedWideMode() {
+    try {
+        return localStorage.getItem(WIDE_MODE_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
+
+function applyWideMode() {
+    // The landing page keeps its card grid; only the two player views stretch.
+    const inRoom = ["view-host", "view-member"].some((id) => {
+        const view = $(id);
+        return view && !view.classList.contains("hidden");
+    });
+    const on = wideMode && inRoom;
+    document.body.classList.toggle("hall-wide", on);
+    for (const id of ["btn-wide-mode", "btn-wide-mode-member"]) {
+        const button = $(id);
+        if (!button) continue;
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+        button.textContent = on ? "退出宽屏" : "宽屏";
+        button.classList.toggle("text-sky-300", on);
+        button.classList.toggle("text-slate-300", !on);
+        button.title = on ? "恢复常规排版（ESC）" : "播放器铺满窗口并收起下方卡片（ESC 退出）";
+    }
+}
+
+function toggleWideMode() {
+    wideMode = !wideMode;
+    try {
+        localStorage.setItem(WIDE_MODE_KEY, wideMode ? "1" : "0");
+    } catch {
+        // ignore
+    }
+    applyWideMode();
+}
+
+function changeView(name) {
+    showView(name);
+    applyWideMode();
 }
 
 function updateMemberSubtitleButton(subtitle) {
@@ -1528,7 +1575,7 @@ function startMember(session, room) {
         }
         applyMemberSubtitles(room);
     }
-    showView("member");
+    changeView("member");
     setMemberOverlay("connecting", "正在连接房间…", null, null);
 
     const controller = new MemberController({
@@ -1637,6 +1684,15 @@ function wire() {
     $("btn-create").addEventListener("click", createRoom);
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
+    for (const id of ["btn-wide-mode", "btn-wide-mode-member"]) {
+        const button = $(id);
+        if (button) button.addEventListener("click", toggleWideMode);
+    }
+    // Escape leaves wide mode; fullscreen swallows it there, which is fine.
+    document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !document.body.classList.contains("hall-wide")) return;
+        toggleWideMode();
+    });
     wireHostSubtitleControls();
     const addMediaButton = $("btn-add-media");
     const addMediaInput = $("host-media-files");
@@ -1987,6 +2043,7 @@ async function init() {
     wire();
     setKind("host_file");
     setSubtitleSize(storedSubtitleSize());
+    wideMode = storedWideMode();
     installDebugHook();
 
     try {

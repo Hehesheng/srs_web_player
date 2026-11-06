@@ -28,6 +28,22 @@
         #member-video.cue-small::cue { font-size: 90%; background: rgba(0, 0, 0, 0.55); }
         #member-video.cue-medium::cue { font-size: 120%; background: rgba(0, 0, 0, 0.55); }
         #member-video.cue-large::cue { font-size: 160%; background: rgba(0, 0, 0, 0.55); }
+        /* Wide mode: the player fills the window and the spare cards fold away. */
+        body.hall-wide { padding-bottom: 0; overflow: hidden; }
+        body.hall-wide main { max-width: none; padding: 0.75rem 1rem; }
+        body.hall-wide #view-host:not(.hidden),
+        body.hall-wide #view-member:not(.hidden) {
+            display: flex;
+            height: calc(100vh - 64px - 1.5rem);
+            flex-direction: column;
+        }
+        body.hall-wide #view-host > div:first-child,
+        body.hall-wide #view-member > div:first-child { flex: none; margin-bottom: 0.75rem; }
+        body.hall-wide #host-shell,
+        body.hall-wide #member-shell { flex: 1 1 auto; min-height: 0; }
+        body.hall-wide #host-video,
+        body.hall-wide #member-video { height: 100%; max-height: none; }
+        body.hall-wide .wide-hide { display: none !important; }
         .member-shell:fullscreen,
         .host-shell:fullscreen {
             display: flex;
@@ -194,6 +210,7 @@
                         <span id="host-room-code" class="font-mono text-sm font-bold tracking-[0.2em] text-sky-300">------</span>
                         <button id="btn-copy-link" class="rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制链接</button>
                     </div>
+                    <button id="btn-wide-mode" class="rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300" aria-pressed="false" title="播放器铺满窗口并收起下方卡片（ESC 退出）">宽屏</button>
                     <button id="btn-end-room" class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-bold text-rose-300 transition hover:bg-rose-500/20">结束房间</button>
                 </div>
             </div>
@@ -261,7 +278,7 @@
                 </div>
             </div>
 
-            <div class="mt-5 glass-card rounded-2xl p-5">
+            <div class="wide-hide mt-5 glass-card rounded-2xl p-5">
                 <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                         <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">播放列表</h2>
@@ -306,7 +323,7 @@
                 </ul>
             </div>
 
-            <div class="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <div class="wide-hide mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
                 <div class="glass-card rounded-2xl p-5 lg:col-span-2">
                     <div class="mb-3 flex items-center justify-between">
                         <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">连接状态</h2>
@@ -328,7 +345,7 @@
                 </div>
             </div>
 
-            <div class="mt-5 glass-card rounded-2xl p-5">
+            <div class="wide-hide mt-5 glass-card rounded-2xl p-5">
                 <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                         <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">字幕</h2>
@@ -359,6 +376,7 @@
                     </span>
                     <span>D <span id="member-d" class="font-mono text-slate-300">0.5s</span></span>
                     <span>倍速 <span id="member-rate" class="font-mono text-slate-300">1.00x</span></span>
+                    <button id="btn-wide-mode-member" class="rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-1.5 text-[10px] font-bold text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-300" aria-pressed="false" title="播放器铺满窗口并收起下方卡片（ESC 退出）">宽屏</button>
                 </div>
             </div>
 
@@ -400,7 +418,7 @@
                 </div>
             </div>
 
-            <div class="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <div class="wide-hide mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
                 <div class="glass-card rounded-2xl p-5 lg:col-span-2">
                     <div class="mb-3 flex items-center justify-between">
                         <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">播放列表</h2>
