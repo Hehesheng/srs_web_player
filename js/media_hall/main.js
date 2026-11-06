@@ -1881,6 +1881,38 @@ function wire() {
 
         $("host-error-close")?.addEventListener("click", () => hideHostError());
 
+        // Left/right scrub the host timeline; the seek reaches members through
+        // the usual "seeked" broadcast, so no extra plumbing is needed.
+        const seekFlash = $("host-seek-flash");
+        let seekFlashTimer = 0;
+        const flashSeek = (seconds) => {
+            if (!seekFlash) return;
+            seekFlash.textContent = seconds < 0 ? `回退 ${Math.abs(seconds)} 秒` : `快进 ${seconds} 秒`;
+            seekFlash.classList.remove("hidden");
+            clearTimeout(seekFlashTimer);
+            seekFlashTimer = window.setTimeout(() => seekFlash.classList.add("hidden"), 700);
+        };
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (!state.host || $("view-host").classList.contains("hidden")) return;
+            const target = event.target;
+            // Leaves the volume/seek sliders and any text field to their own keys.
+            if (target && target.closest && target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+            const duration = Number.isFinite(video.duration) ? video.duration : 0;
+            if (!duration || !video.getAttribute("src")) return;
+            const step = event.key === "ArrowRight" ? 5 : -5;
+            event.preventDefault();
+            const next = Math.min(Math.max((video.currentTime || 0) + step, 0), duration);
+            try {
+                video.currentTime = next;
+            } catch {
+                return;
+            }
+            syncTimeline();
+            flashSeek(step);
+        });
+
         playButton.addEventListener("click", () => {
             if (!state.host) return;
             if (video.paused || video.ended) state.host.play();
