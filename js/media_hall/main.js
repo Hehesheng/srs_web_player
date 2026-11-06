@@ -31,6 +31,7 @@ const SUBTITLE_SIZE_CLASSES = ["cue-small", "cue-medium", "cue-large"];
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
+let hostSubtitleMenuSignature = "";
 let memberRoomState = null;
 let memberRoomStateTs = 0;
 let memberSubtitlesVisible = true;
@@ -801,33 +802,88 @@ function handleHostEnded() {
     playPlaylistItem(next);
 }
 
-function renderHostSubtitles() {
-    const select = $("host-subtitle-select");
-    if (!select) return;
-    const subtitles = subtitleListOf(hostRoomState);
-    const activeId = (hostRoomState && hostRoomState.active_subtitle_id) || "";
-    const activeVisible = !(hostRoomState && hostRoomState.active_subtitle_visible === false);
+function hostActiveSubtitle() {
+    const activeId = (hostRoomState && hostRoomState.active_subtitle_id) || null;
+    if (!activeId) return null;
+    return subtitleListOf(hostRoomState).find((item) => item.subtitle_id === activeId) || null;
+}
 
-    select.replaceChildren();
-    const off = document.createElement("option");
-    off.value = "";
-    off.textContent = subtitles.length ? "关闭字幕" : "暂无字幕";
-    select.appendChild(off);
-    for (const item of subtitles) {
-        const option = document.createElement("option");
-        option.value = item.subtitle_id;
-        option.textContent = item.name || item.lang || "字幕";
-        select.appendChild(option);
+function updateHostSubtitleButton(subtitle) {
+    const button = $("btn-host-subtitles");
+    const menuButton = $("btn-host-subtitle-menu");
+    const visible = !(hostRoomState && hostRoomState.active_subtitle_visible === false);
+    if (button) {
+        button.disabled = !subtitle;
+        const on = Boolean(subtitle) && visible;
+        // Only one colour class may be present: the stylesheet order between
+        // slate and sky is not the order they are added in.
+        button.classList.toggle("text-sky-300", on);
+        button.classList.toggle("text-slate-200", !on);
+        button.setAttribute("aria-pressed", Boolean(subtitle) && visible ? "true" : "false");
+        button.title = !subtitle
+            ? "当前没有字幕"
+            : visible
+              ? "隐藏字幕（成员跟随）"
+              : "显示字幕（成员跟随）";
     }
-    const current = subtitles.some((item) => item.subtitle_id === activeId) ? activeId : "";
-    select.value = current;
-    select.disabled = subtitles.length === 0;
+    if (menuButton) menuButton.disabled = false;
+}
 
-    const checkbox = $("host-subtitle-visible");
-    if (checkbox) {
-        checkbox.checked = Boolean(current) && activeVisible;
-        checkbox.disabled = !current;
+function closeHostSubtitleMenu() {
+    const menu = $("host-subtitle-menu");
+    const button = $("btn-host-subtitle-menu");
+    if (menu) menu.classList.add("hidden");
+    if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function toggleHostSubtitleMenu() {
+    const menu = $("host-subtitle-menu");
+    const button = $("btn-host-subtitle-menu");
+    if (!menu || !button) return;
+    const open = menu.classList.toggle("hidden") === false;
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) renderHostSubtitleMenu(hostActiveSubtitle(), true);
+}
+
+function chooseHostSubtitle(subtitleId) {
+    closeHostSubtitleMenu();
+    hostSubtitleMenuSignature = "";
+    // The host's pick is the room's pick: members follow it unless they chose
+    // a track of their own.
+    sendHostSubtitleSelect(subtitleId || null, true);
+}
+
+function renderHostSubtitleMenu(active, force) {
+    const menu = $("host-subtitle-menu");
+    if (!menu) return;
+    const options = subtitleListOf(hostRoomState);
+    const signature = [options.map((item) => item.subtitle_id).join(","), active ? active.subtitle_id : ""].join("|");
+    if (!force && signature === hostSubtitleMenuSignature) return;
+    hostSubtitleMenuSignature = signature;
+
+    menu.textContent = "";
+    if (!options.length) {
+        const empty = document.createElement("div");
+        empty.className = "px-2.5 py-1.5 text-[11px] text-slate-500";
+        empty.textContent = "当前视频没有可选字幕";
+        menu.appendChild(empty);
+        return;
     }
+    menu.appendChild(subtitleMenuOption(!active, "关闭字幕", "", () => chooseHostSubtitle(null)));
+    for (const item of options) {
+        const selected = Boolean(active) && active.subtitle_id === item.subtitle_id;
+        menu.appendChild(
+            subtitleMenuOption(selected, item.name || item.lang || "字幕", selected ? "播放中" : "", () =>
+                chooseHostSubtitle(item.subtitle_id)
+            )
+        );
+    }
+}
+
+function renderHostSubtitles(force) {
+    const active = hostActiveSubtitle();
+    updateHostSubtitleButton(active);
+    renderHostSubtitleMenu(active, force);
     applyHostVideoSubtitle();
 }
 
@@ -906,20 +962,22 @@ async function uploadHostSubtitleFile() {
 }
 
 function wireHostSubtitleControls() {
-    const select = $("host-subtitle-select");
-    if (select) {
-        select.addEventListener("change", () => {
-            sendHostSubtitleSelect(select.value || null, true);
-        });
-    }
-    const checkbox = $("host-subtitle-visible");
-    if (checkbox) {
-        checkbox.addEventListener("change", () => {
-            const activeId = (hostRoomState && hostRoomState.active_subtitle_id) || null;
-            if (!activeId) return;
-            sendHostSubtitleSelect(activeId, checkbox.checked);
-        });
-    }
+    $("btn-host-subtitles").addEventListener("click", (event) => {
+        event.stopPropagation();
+        const active = hostActiveSubtitle();
+        if (!active) return;
+        const visible = !(hostRoomState && hostRoomState.active_subtitle_visible === false);
+        sendHostSubtitleSelect(active.subtitle_id, !visible);
+    });
+    $("btn-host-subtitle-menu").addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleHostSubtitleMenu();
+    });
+    $("host-subtitle-menu").addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => closeHostSubtitleMenu());
+    $("host-subtitle-size").addEventListener("change", (event) => {
+        setSubtitleSize(event.target.value);
+    });
     const uploadButton = $("btn-upload-subtitle");
     const uploadInput = $("host-subtitle-file");
     if (uploadButton && uploadInput) {
@@ -1225,7 +1283,7 @@ function updateMemberMembers(members) {
     });
 }
 
-function storedMemberSubtitleSize() {
+function storedSubtitleSize() {
     try {
         const value = localStorage.getItem(SUBTITLE_SIZE_KEY);
         if (["small", "medium", "large"].includes(value)) return value;
@@ -1235,15 +1293,20 @@ function storedMemberSubtitleSize() {
     return "medium";
 }
 
-function setMemberSubtitleSize(size) {
+function setSubtitleSize(size) {
     const chosen = ["small", "medium", "large"].includes(size) ? size : "medium";
-    const video = $("member-video");
-    if (video) {
+    // Both players share one preference: the host watches the same video, so a
+    // size that differs between the two views just looks broken when switching.
+    for (const id of ["host-video", "member-video"]) {
+        const video = $(id);
+        if (!video) continue;
         video.classList.remove(...SUBTITLE_SIZE_CLASSES);
         video.classList.add(`cue-${chosen}`);
     }
-    const select = $("member-subtitle-size");
-    if (select) select.value = chosen;
+    for (const id of ["host-subtitle-size", "member-subtitle-size"]) {
+        const select = $(id);
+        if (select) select.value = chosen;
+    }
     try {
         localStorage.setItem(SUBTITLE_SIZE_KEY, chosen);
     } catch {
@@ -1257,7 +1320,9 @@ function updateMemberSubtitleButton(subtitle) {
     const override = Boolean(memberSubtitleChoice);
     if (button) {
         button.disabled = !subtitle;
-        button.classList.toggle("text-sky-300", Boolean(subtitle) && memberSubtitlesVisible);
+        const on = Boolean(subtitle) && memberSubtitlesVisible;
+        button.classList.toggle("text-sky-300", on);
+        button.classList.toggle("text-slate-200", !on);
         button.setAttribute("aria-pressed", memberSubtitlesVisible ? "true" : "false");
         button.title = !subtitle
             ? "当前没有字幕"
@@ -1268,6 +1333,7 @@ function updateMemberSubtitleButton(subtitle) {
     if (menuButton) {
         menuButton.disabled = false;
         menuButton.classList.toggle("text-sky-300", override);
+        menuButton.classList.toggle("text-slate-200", !override);
         menuButton.title = override ? "正在使用本机选择的字幕" : "选择字幕（仅本机生效）";
     }
 }
@@ -1311,7 +1377,7 @@ function chooseMemberSubtitle(subtitleId) {
     applyMemberSubtitles(memberRoomState);
 }
 
-function memberSubtitleMenuOption(selected, label, note, onPick) {
+function subtitleMenuOption(selected, label, note, onPick) {
     const item = document.createElement("button");
     item.className =
         "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] transition hover:bg-white/10 " +
@@ -1356,7 +1422,7 @@ function renderMemberSubtitleMenu(roomState, effective, force) {
         return;
     }
     menu.appendChild(
-        memberSubtitleMenuOption(
+        subtitleMenuOption(
             !memberSubtitleChoice,
             "跟随房主",
             null,
@@ -1368,7 +1434,7 @@ function renderMemberSubtitleMenu(roomState, effective, force) {
         const label = item.name || item.lang || "字幕";
         const note = item.subtitle_id === hostActiveId ? "房主" : null;
         menu.appendChild(
-            memberSubtitleMenuOption(selected, label, note, () =>
+            subtitleMenuOption(selected, label, note, () =>
                 chooseMemberSubtitle(item.subtitle_id)
             )
         );
@@ -1442,7 +1508,7 @@ function startMember(session, room) {
     memberSubtitleMenuSignature = "";
     memberSubtitlesVisible = true;
     removeSubtitleTracks($("member-video"));
-    setMemberSubtitleSize(storedMemberSubtitleSize());
+    setSubtitleSize(storedSubtitleSize());
     updateMemberSubtitleButton(null);
 
     $("member-room-name").textContent = (room && room.name) || session.room_name || "媒体播放厅";
@@ -1644,7 +1710,7 @@ function wire() {
     $("member-subtitle-menu").addEventListener("click", (event) => event.stopPropagation());
     document.addEventListener("click", () => closeMemberSubtitleMenu());
     $("member-subtitle-size").addEventListener("change", (event) => {
-        setMemberSubtitleSize(event.target.value);
+        setSubtitleSize(event.target.value);
     });
     $("btn-copy-link").addEventListener("click", async () => {
         if (!state.room) return;
@@ -1920,7 +1986,7 @@ async function restoreFromUrl() {
 async function init() {
     wire();
     setKind("host_file");
-    setMemberSubtitleSize(storedMemberSubtitleSize());
+    setSubtitleSize(storedSubtitleSize());
     installDebugHook();
 
     try {
