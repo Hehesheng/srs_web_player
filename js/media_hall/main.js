@@ -33,6 +33,8 @@ const WIDE_MODE_KEY = "hall_wide_mode";
 let hostRoomState = null;
 let hostRoomStateTs = 0;
 let hostSubtitleMenuSignature = "";
+// The burnt-in track to restore when the host turns subtitles back on.
+let lastBurnedSubtitle;
 let memberRoomState = null;
 let memberRoomStateTs = 0;
 let memberSubtitlesVisible = true;
@@ -854,6 +856,15 @@ function handleHostEnded() {
     playPlaylistItem(next);
 }
 
+// A transcoded Jellyfin item has its subtitle drawn into the picture by the
+// server, so there is no <track> to switch: the room picks one track for
+// everyone, or none at all.
+function burnedSubtitleTracks(roomState) {
+    if (!roomState || !roomState.media || roomState.media.playback_mode !== "hls") return [];
+    const tracks = roomState.jellyfin_subtitles;
+    return Array.isArray(tracks) ? tracks : [];
+}
+
 function hostActiveSubtitle() {
     const activeId = (hostRoomState && hostRoomState.active_subtitle_id) || null;
     if (!activeId) return null;
@@ -863,6 +874,24 @@ function hostActiveSubtitle() {
 function updateHostSubtitleButton(subtitle) {
     const button = $("btn-host-subtitles");
     const menuButton = $("btn-host-subtitle-menu");
+    const burned = burnedSubtitleTracks(hostRoomState);
+    if (burned.length) {
+        const off = Boolean(hostRoomState && hostRoomState.jellyfin_subtitles_off);
+        if (button) {
+            button.disabled = false;
+            button.classList.toggle("text-sky-300", !off);
+            button.classList.toggle("text-slate-200", off);
+            button.setAttribute("aria-pressed", off ? "false" : "true");
+            button.title = off ? "显示字幕（烧录进画面，全场统一）" : "关闭字幕（烧录进画面，全场统一）";
+        }
+        if (menuButton) {
+            menuButton.disabled = false;
+            menuButton.classList.remove("text-sky-300");
+            menuButton.classList.add("text-slate-200");
+            menuButton.title = "选择烧录字幕（全场统一）";
+        }
+        return;
+    }
     const visible = !(hostRoomState && hostRoomState.active_subtitle_visible === false);
     if (button) {
         button.disabled = !subtitle;
@@ -905,9 +934,59 @@ function chooseHostSubtitle(subtitleId) {
     sendHostSubtitleSelect(subtitleId || null, true);
 }
 
+// Burned subtitles are chosen on the server: the pick restarts the transcode
+// at the current position, so every member ends up on the same track.
+async function chooseHostJellyfinSubtitle(choice) {
+    closeHostSubtitleMenu();
+    hostSubtitleMenuSignature = "";
+    const session = state.room;
+    if (!session || !state.host) return;
+    // Remember the track behind "off", so the CC button can bring it back.
+    if (choice !== "off") lastBurnedSubtitle = choice;
+    const position = Math.max(0, Number(state.host.absoluteTime()) || 0);
+    try {
+        await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/hls/subtitle`, {
+            method: "POST",
+            headers: { "X-Host-Token": session.host_token },
+            body: { subtitle: choice, position },
+        });
+        toast(choice === "off" ? "已关闭字幕" : "正在切换字幕…", "info");
+    } catch (error) {
+        toast(error.message || "切换字幕失败", "error");
+    }
+}
+
 function renderHostSubtitleMenu(active, force) {
     const menu = $("host-subtitle-menu");
     if (!menu) return;
+    const burned = burnedSubtitleTracks(hostRoomState);
+    if (burned.length) {
+        const current = hostRoomState.jellyfin_subtitle;
+        const off = Boolean(hostRoomState.jellyfin_subtitles_off);
+        const pick = off ? "off" : current === null || current === undefined ? "auto" : `id:${current}`;
+        const signature =
+            "burned|" + burned.map((track) => `${track.index}:${track.label}`).join(",") + "|" + pick;
+        if (!force && signature === hostSubtitleMenuSignature) return;
+        hostSubtitleMenuSignature = signature;
+        menu.textContent = "";
+        menu.appendChild(
+            subtitleMenuOption(pick === "auto", "跟随 Jellyfin 默认", pick === "auto" ? "播放中" : "", () =>
+                chooseHostJellyfinSubtitle(null)
+            )
+        );
+        for (const track of burned) {
+            const selected = pick === `id:${track.index}`;
+            menu.appendChild(
+                subtitleMenuOption(selected, track.label || `字幕 ${track.index}`, selected ? "播放中" : "", () =>
+                    chooseHostJellyfinSubtitle(track.index)
+                )
+            );
+        }
+        menu.appendChild(
+            subtitleMenuOption(off, "关闭字幕", off ? "播放中" : "", () => chooseHostJellyfinSubtitle("off"))
+        );
+        return;
+    }
     const options = subtitleListOf(hostRoomState);
     const signature = [options.map((item) => item.subtitle_id).join(","), active ? active.subtitle_id : ""].join("|");
     if (!force && signature === hostSubtitleMenuSignature) return;
@@ -1026,6 +1105,21 @@ async function uploadHostSubtitleFile() {
 function wireHostSubtitleControls() {
     $("btn-host-subtitles").addEventListener("click", (event) => {
         event.stopPropagation();
+        if (burnedSubtitleTracks(hostRoomState).length) {
+            // On a burnt-in track the CC button is just an on/off switch; the
+            // language picker lives in the menu next to it.
+            const off = Boolean(hostRoomState && hostRoomState.jellyfin_subtitles_off);
+            if (off) {
+                chooseHostJellyfinSubtitle(lastBurnedSubtitle === undefined ? null : lastBurnedSubtitle);
+            } else {
+                lastBurnedSubtitle =
+                    hostRoomState && hostRoomState.jellyfin_subtitle !== undefined
+                        ? hostRoomState.jellyfin_subtitle
+                        : null;
+                chooseHostJellyfinSubtitle("off");
+            }
+            return;
+        }
         const active = hostActiveSubtitle();
         if (!active) return;
         const visible = !(hostRoomState && hostRoomState.active_subtitle_visible === false);
@@ -1429,6 +1523,18 @@ function changeView(name) {
 function updateMemberSubtitleButton(subtitle) {
     const button = $("btn-member-subtitles");
     const menuButton = $("btn-member-subtitle-menu");
+    if (burnedSubtitleTracks(memberRoomState).length) {
+        // The subtitle is part of the picture here; only the host can change it.
+        for (const node of [button, menuButton]) {
+            if (!node) continue;
+            node.disabled = true;
+            node.classList.remove("text-sky-300");
+            node.classList.add("text-slate-200");
+            node.setAttribute("aria-pressed", "false");
+            node.title = "字幕由房主统一选择";
+        }
+        return;
+    }
     const override = Boolean(memberSubtitleChoice);
     if (button) {
         button.disabled = !subtitle;
