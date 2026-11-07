@@ -1060,6 +1060,76 @@ function applyHostVideoSubtitle() {
     }
 }
 
+// Transcode quality.  The room carries the value; this ladder is only the
+// menu, cut down to whatever ceiling the server was configured to pull.
+const QUALITY_LADDER = [3_000_000, 4_000_000, 6_000_000, 8_000_000, 12_000_000, 20_000_000];
+let hostQualityMenuSignature = "";
+
+function mbps(value) {
+    return `${Math.round(Number(value) / 100000) / 10} Mbps`;
+}
+
+function hostQualityLadder(roomState) {
+    const max = Number(roomState && roomState.jellyfin_bitrate_max) || 0;
+    const current = Number(roomState && roomState.jellyfin_bitrate) || 0;
+    const ladder = QUALITY_LADDER.filter((value) => !max || value <= max);
+    if (current && !ladder.includes(current)) ladder.push(current);
+    return ladder.sort((a, b) => a - b);
+}
+
+function closeHostQualityMenu() {
+    const menu = $("host-quality-menu");
+    const button = $("btn-host-quality");
+    if (menu) menu.classList.add("hidden");
+    if (button) button.setAttribute("aria-expanded", "false");
+}
+
+async function chooseHostQuality(bitrate) {
+    closeHostQualityMenu();
+    const session = state.room;
+    if (!session || !state.host) return;
+    const value = Number(bitrate) || 0;
+    if (value === Number(hostRoomState && hostRoomState.jellyfin_bitrate)) return;
+    const position = Math.max(0, Number(state.host.absoluteTime()) || 0);
+    try {
+        await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/hls/bitrate`, {
+            method: "POST",
+            headers: { "X-Host-Token": session.host_token },
+            body: { bitrate: value, position },
+        });
+        toast(`正在切换到 ${mbps(value)}…`, "info");
+    } catch (error) {
+        toast(error.message || "切换画质失败", "error");
+    }
+}
+
+function renderHostQuality(force) {
+    const menu = $("host-quality-menu");
+    if (!menu) return;
+    const options = hostQualityLadder(hostRoomState);
+    const current = Number(hostRoomState && hostRoomState.jellyfin_bitrate) || 0;
+    const signature = `${options.join(",")}|${current}`;
+    if (!force && signature === hostQualityMenuSignature) return;
+    hostQualityMenuSignature = signature;
+    const label = $("host-quality-label");
+    if (label) label.textContent = current ? `${Math.round(current / 100000) / 10}M` : "--";
+    menu.replaceChildren();
+    for (const value of options) {
+        const selected = value === current;
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className =
+            "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] transition hover:bg-white/10 " +
+            (selected ? "font-bold text-sky-300" : "text-slate-300");
+        item.textContent = mbps(value);
+        item.addEventListener("click", (event) => {
+            event.stopPropagation();
+            chooseHostQuality(value);
+        });
+        menu.appendChild(item);
+    }
+}
+
 function applyHostRoomState(roomState) {
     if (!roomState || typeof roomState !== "object") return;
     const ts = Number(roomState.server_ts) || 0;
@@ -1071,6 +1141,7 @@ function applyHostRoomState(roomState) {
     if (Array.isArray(roomState.playlist)) setHostPlaylist(roomState.playlist);
     updateHostMediaLabel(roomState.media);
     renderHostSubtitles();
+    renderHostQuality();
     followHostStream();
 }
 
@@ -2354,6 +2425,18 @@ function wire() {
 
         // Playback rate: the host sets the pace and members follow through the
         // host timeline, so only this bar carries the control.
+        const qualityButton = $("btn-host-quality");
+        if (qualityButton) {
+            qualityButton.addEventListener("click", (event) => {
+                event.stopPropagation();
+                renderHostQuality(true);
+                const menu = $("host-quality-menu");
+                const open = menu.classList.toggle("hidden") === false;
+                qualityButton.setAttribute("aria-expanded", open ? "true" : "false");
+            });
+            document.addEventListener("click", () => closeHostQualityMenu());
+        }
+
         const rateButton = $("btn-host-rate");
         const rateMenu = $("host-rate-menu");
         const rateLabel = $("host-rate-label");
