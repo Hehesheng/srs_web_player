@@ -22,7 +22,6 @@ import {
 const HOST_KEY = "hall_host_session";
 const MEMBER_PREFIX = "hall_member_";
 const MAX_HOST_FILE_BYTES = 64 * 1024 * 1024 * 1024;
-const MAX_PLAYLIST_ITEMS = 100;
 const AUTOPLAY_KEY = "hall_autoplay";
 const MAX_SUBTITLE_BYTES = 10 * 1024 * 1024;
 const SUBTITLE_TRACK_FLAG = "hallSubtitle";
@@ -46,7 +45,6 @@ let memberSubtitleMenuSignature = "";
 let wideMode = false;
 
 const state = {
-    kind: "host_file",
     role: null,
     room: null,
     host: null,
@@ -322,19 +320,6 @@ function setButtonsBusy(button, busy, label) {
 }
 
 // -- landing ---------------------------------------------------------
-function setKind(kind) {
-    state.kind = kind;
-    const fileButton = $("media-kind-file");
-    const urlButton = $("media-kind-url");
-    const active = "kind-btn rounded-xl border border-sky-500/60 bg-sky-500/10 px-4 py-3 text-left text-sm font-semibold text-sky-300";
-    const inactive = "kind-btn rounded-xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-left text-sm font-semibold text-slate-400";
-    fileButton.className = kind === "host_file" ? active : inactive;
-    urlButton.className = kind === "url" ? active : inactive;
-    $("file-fields").classList.toggle("hidden", kind !== "host_file");
-    $("url-fields").classList.toggle("hidden", kind !== "url");
-    showError("create-error", "");
-}
-
 function validateHostFile(file) {
     if (!file) return "没有选择文件";
     if (!isLikelyVideo(file)) return "请选择浏览器可播放的视频文件（mp4 / webm / mkv 等）";
@@ -346,50 +331,13 @@ function validateHostFile(file) {
 async function createRoom() {
     showError("create-error", "");
     const name = ($("create-name").value || "").trim() || "媒体播放厅";
-    const subtitleInput = $("create-subtitle");
-    const subtitleFile = subtitleInput && subtitleInput.files ? subtitleInput.files[0] : null;
-    let media = null;
-    let files = [];
-
-    if (state.kind === "host_file") {
-        files = Array.from(($("create-file").files || []));
-        if (files.length > MAX_PLAYLIST_ITEMS) {
-            showError("create-error", `一次最多添加 ${MAX_PLAYLIST_ITEMS} 个视频`);
-            return;
-        }
-        for (const file of files) {
-            const problem = validateHostFile(file);
-            if (problem) {
-                showError("create-error", `${file.name}：${problem}`);
-                return;
-            }
-        }
-        // Choosing files is optional: an empty room can be filled later.
-        const first = files[0] || null;
-        if (first) {
-            media = {
-                kind: "host_file",
-                name: first.name,
-                size: first.size,
-                mime: first.type || "application/octet-stream",
-            };
-        }
-    } else {
-        const url = ($("create-url").value || "").trim();
-        if (!/^https?:\/\//i.test(url)) {
-            showError("create-error", "请输入 http(s) 开头的视频地址");
-            return;
-        }
-        media = { kind: "url", name: "", url };
-    }
 
     await endStoredHostSession();
     const button = $("btn-create");
     setButtonsBusy(button, true, "正在创建…");
     try {
-        const body = { name };
-        if (media) body.media = media;
-        const data = await request("/hall/api/rooms", { method: "POST", body });
+        // The room starts empty; the host picks what to watch from inside it.
+        const data = await request("/hall/api/rooms", { method: "POST", body: { name } });
         const session = {
             room_id: data.room_id,
             room_code: data.room_code,
@@ -401,22 +349,7 @@ async function createRoom() {
         state.room = session;
         persistHostSession();
         window.history.replaceState({}, "", `?room=${encodeURIComponent(data.room_code)}`);
-        if (subtitleInput) subtitleInput.value = "";
-        const fileInput = $("create-file");
-        if (fileInput) fileInput.value = "";
-        startHost(session, files[0] || null, data.room);
-        if (files.length > 1) addHostFiles(files.slice(1));
-        if (subtitleFile) uploadInitialSubtitle(session, subtitleFile);
-        if (data.media_id) {
-            if (files[0]) {
-                extractEmbeddedSubtitles(session, data.media_id, files[0], { file: files[0] });
-            } else if (data.media && data.media.kind === "url") {
-                extractEmbeddedSubtitles(session, data.media_id, data.media, {
-                    url: session.media_url,
-                    size: data.media.size,
-                });
-            }
-        }
+        startHost(session, null, data.room);
     } catch (error) {
         showError("create-error", error.message || "创建房间失败");
     } finally {
@@ -593,7 +526,7 @@ function renderHostPlaylist() {
     if (!state.playlist.length) {
         const empty = document.createElement("li");
         empty.className = "text-xs italic text-slate-600";
-        empty.textContent = "播放列表为空，点「添加视频」选择文件";
+        empty.textContent = "播放列表为空，点上面的「本地文件」「网络地址」或「Jellyfin 媒体库」添加";
         list.appendChild(empty);
         return;
     }
@@ -1062,20 +995,6 @@ function followHostStream() {
 function sendHostSubtitleSelect(subtitleId, visible) {
     if (!state.host) return;
     state.host.selectSubtitle(subtitleId || null, visible !== false);
-}
-
-async function uploadInitialSubtitle(session, file) {
-    const problem = validateSubtitleFile(file);
-    if (problem) {
-        toast(problem, "error");
-        return;
-    }
-    try {
-        await uploadSubtitle(session, file);
-        toast(`字幕「${file.name}」已上传`, "success");
-    } catch (error) {
-        toast(error.message || "字幕上传失败，可稍后在房主控制区重试", "error");
-    }
 }
 
 async function uploadHostSubtitleFile() {
@@ -1825,8 +1744,6 @@ async function requestWakeLock() {
 
 // -- wiring ----------------------------------------------------------
 function wire() {
-    $("media-kind-file").addEventListener("click", () => setKind("host_file"));
-    $("media-kind-url").addEventListener("click", () => setKind("url"));
     $("btn-create").addEventListener("click", createRoom);
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
@@ -1840,37 +1757,28 @@ function wire() {
         toggleWideMode();
     });
     wireHostSubtitleControls();
-    const addMediaButton = $("btn-add-media");
     const addMediaInput = $("host-media-files");
-    const addMediaMenu = $("add-media-menu");
     const addUrlRow = $("host-add-url");
     const addUrlInput = $("host-url-input");
     const addUrlHint = $("host-url-hint");
-    const closeAddMenu = () => addMediaMenu.classList.add("hidden");
     const showUrlRow = (show) => {
         addUrlRow.classList.toggle("hidden", !show);
         addUrlRow.classList.toggle("flex", show);
         addUrlHint.classList.toggle("hidden", !show);
         if (show) addUrlInput.focus();
     };
-    if (addMediaButton && addMediaInput && addMediaMenu) {
-        addMediaButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-            addMediaMenu.classList.toggle("hidden");
-        });
-        document.addEventListener("click", closeAddMenu);
+    if (addMediaInput) {
         $("btn-add-file").addEventListener("click", () => {
-            closeAddMenu();
+            showUrlRow(false);
+            jellyfin().showLogin(false);
             addMediaInput.click();
         });
         $("btn-add-url").addEventListener("click", () => {
-            closeAddMenu();
             showUrlRow(false);
             jellyfin().showLogin(false);
             showUrlRow(true);
         });
         $("btn-add-jellyfin")?.addEventListener("click", () => {
-            closeAddMenu();
             showUrlRow(false);
             jellyfin().begin();
         });
@@ -2327,7 +2235,6 @@ async function restoreFromUrl() {
 
 async function init() {
     wire();
-    setKind("host_file");
     setSubtitleSize(storedSubtitleSize());
     wideMode = storedWideMode();
     installDebugHook();
