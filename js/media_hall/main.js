@@ -377,6 +377,27 @@ async function joinRoom() {
     const button = $("btn-join");
     setButtonsBusy(button, true, "正在加入…");
     try {
+        // Joining again with the same code and the same name is a return, not a
+        // new arrival: leaving keeps the member token, so reuse it.  Otherwise
+        // every leave/rejoin would leave a ghost entry in the host's list.
+        const stored = readMemberSession(code);
+        if (stored && stored.member_token && stored.member_id && name === stored.name) {
+            const info = await request(`/hall/api/rooms/${encodeURIComponent(code)}`).catch(() => null);
+            const stillHere = info && !info.ended && Array.isArray(info.members)
+                && info.members.some((member) => member.id === stored.member_id);
+            if (stillHere) {
+                saveMemberSession(stored);
+                window.history.replaceState({}, "", `?room=${encodeURIComponent(code)}`);
+                startMember(stored, info);
+                return;
+            }
+            try {
+                sessionStorage.removeItem(memberKey(code));
+            } catch {
+                // ignore
+            }
+        }
+
         const data = await request(`/hall/api/rooms/${encodeURIComponent(code)}/join`, {
             method: "POST",
             body: { name },
@@ -1452,6 +1473,51 @@ async function endCurrentRoom() {
 }
 
 // -- member ----------------------------------------------------------
+/**
+ * Drop this viewer's membership and go back to the landing page.
+ *
+ * The socket close is what tells the room: the server marks the member gone
+ * and tells the host right away, so nothing has to be deleted by hand.  The
+ * member token is kept, so rejoining with the same code restores the same
+ * identity instead of adding a second entry to the list.
+ */
+function leaveCurrentRoom() {
+    if (state.role !== "member" || !state.member) return;
+    const session = state.member.session || {};
+    if (!window.confirm("确定离开房间吗？可以凭房间码重新加入。")) return;
+
+    const video = $("member-video");
+    if (state.member.controller) state.member.controller.destroy();
+    state.member = null;
+    state.role = null;
+    memberRoomState = null;
+    memberRoomStateTs = 0;
+    overlayEntries.clear();
+    if (video) {
+        removeSubtitleTracks(video);
+        try {
+            video.pause();
+        } catch {
+            // ignore
+        }
+        // Direct playback is fetched straight from the element; stop it.
+        video.removeAttribute("src");
+        try {
+            video.load();
+        } catch {
+            // ignore
+        }
+    }
+    window.history.replaceState({}, "", window.location.pathname);
+    // Leave the code ready to rejoin with one tap.
+    const codeField = $("join-code");
+    if (codeField && session.room_code) codeField.value = session.room_code;
+    setMemberStatus("已离开房间");
+    changeView("landing");
+    refreshRoomList();
+    toast("已离开房间", "info");
+}
+
 function setMemberStatus(text, emphasize = false) {
     const el = $("member-status");
     if (!el) return;
@@ -2044,6 +2110,7 @@ function wire() {
     $("btn-create").addEventListener("click", createRoom);
     $("btn-join").addEventListener("click", joinRoom);
     $("btn-end-room").addEventListener("click", endCurrentRoom);
+    $("btn-leave-room").addEventListener("click", leaveCurrentRoom);
     for (const id of ["btn-wide-mode", "btn-wide-mode-member"]) {
         const button = $(id);
         if (button) button.addEventListener("click", toggleWideMode);
