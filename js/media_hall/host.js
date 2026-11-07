@@ -8,6 +8,9 @@ import { websocketUrl } from "./protocol.js";
 
 const HEARTBEAT_PLAYING_MS = 250;
 const HEARTBEAT_PAUSED_MS = 1000;
+// How long the position may stand still before we call it a stall.  Long
+// enough to ride out a single hiccup, short enough that members stop promptly.
+const STALL_CONFIRM_MS = 700;
 
 export class HostController {
     constructor({ video, file, session, onStatus, onMembers, onRoomState, onError, onClosed, onMetrics, onProgress, onEnded, onLoaded }) {
@@ -28,6 +31,8 @@ export class HostController {
         this.objectUrl = null;
         this.seq = 0;
         this.waiting = false;
+        this.lastPos = 0;
+        this.lastAdvanceAt = 0;
         this.mediaEnded = false;
         this.ready = false;
         this.lastSentAt = 0;
@@ -59,7 +64,7 @@ export class HostController {
             duration: this.effectiveDuration(),
             rate: Number(video.playbackRate) || 1,
             paused: video.paused || video.ended,
-            waiting: this.waiting,
+            waiting: this.trackAdvance(),
             ...overrides,
         };
     }
@@ -120,12 +125,11 @@ export class HostController {
             this.sendState(false);
         });
         listen("ratechange", () => this.sendState(false));
-        listen("seeking", () => {
-            this.waiting = video.readyState < 3;
-        });
+        // Seeking is not buffering: `readyState` dips during any seek, and on
+        // iOS it sits at 2 anyway.  The advance tracker decides (see above).
+        listen("seeking", () => this.sendState(false));
         listen("seeked", () => {
             this.mediaEnded = false;
-            this.waiting = video.readyState < 3;
             this.seq = (this.seq + 1) >>> 0;
             this.sendState(true);
         });
@@ -179,6 +183,30 @@ export class HostController {
         this.emitProgress();
     }
 
+    /**
+     * Whether this host is actually starved.
+     *
+     * `readyState < 3` cannot be used for that: iOS/Safari holds a native HLS
+     * element at 2 for the whole stream while the picture runs, and a lone
+     * `stalled` event does not stop playback either, so both would freeze the
+     * room's timeline while nothing is wrong.  The position standing still is
+     * the one signal that means the host cannot play right now.
+     */
+    trackAdvance() {
+        const video = this.video;
+        const now = performance.now();
+        const position = Number(video.currentTime) || 0;
+        if (Math.abs(position - this.lastPos) > 0.0005) {
+            this.lastPos = position;
+            this.lastAdvanceAt = now;
+            if (this.waiting) this.waiting = false;
+        } else if (!this.lastAdvanceAt) {
+            this.lastAdvanceAt = now;
+        }
+        const playing = !video.paused && !video.ended;
+        return playing && now - this.lastAdvanceAt > STALL_CONFIRM_MS;
+    }
+
     emitProgress() {
         this.onProgress(this.progressSnapshot());
     }
@@ -188,7 +216,7 @@ export class HostController {
         if (!this.worker || !this.ready) return;
         const position = Number(video.currentTime) || 0;
         const playing = !video.paused && !video.ended;
-        const buffering = this.waiting || (playing && video.readyState < 3);
+        const buffering = this.trackAdvance();
         this.lastSentAt = performance.now();
         this.worker.postMessage({
             type: isSeek ? "seek" : "state",

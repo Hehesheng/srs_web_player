@@ -1998,7 +1998,9 @@ function startMember(session, room) {
             $("member-rtt").textContent = stats.rtt ? `${Math.round(stats.rtt)}ms` : "--";
             $("member-drift").textContent = `${stats.drift >= 0 ? "+" : ""}${stats.drift.toFixed(2)}s`;
             $("member-d").textContent = `${stats.d.toFixed(1)}s`;
-            $("member-rate").textContent = `${stats.rate.toFixed(2)}x`;
+            // "(固定)" means this device refuses rate changes and is being kept
+            // in sync with small seeks instead — worth seeing on a phone.
+            $("member-rate").textContent = `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`;
         },
         onEnded: () => {
             setStatusBadge("member-host-badge", "已结束", "muted");
@@ -2515,6 +2517,14 @@ function installDebugHook() {
             videoTime: video ? video.currentTime : null,
             paused: video ? video.paused : null,
             readyState: video ? video.readyState : null,
+            // Local playback health, which is what an iOS report needs: whether
+            // the picture is actually starved and whether the engine took our
+            // rate corrections at all.
+            drift: sync ? sync.emaDrift : null,
+            rate: video ? video.playbackRate : null,
+            stalled: sync ? Boolean(sync.stallSince) : null,
+            frozenFor: sync ? Math.round(performance.now() - sync.lastAdvanceAt) : null,
+            rateLocked: sync ? sync.rateLocked : null,
         };
     };
 }
