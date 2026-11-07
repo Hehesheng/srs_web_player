@@ -1549,6 +1549,82 @@ function toggleWideMode() {
     applyWideMode();
 }
 
+// Fullscreen degrades in three steps: the browser's own fullscreen, then the
+// iOS player (Safari refuses fullscreen to anything but the video element),
+// then a fixed in-page takeover so a phone still gets a full-bleed picture.
+const PSEUDO_FULLSCREEN = "pseudo-fullscreen";
+
+function fullscreenOn(shell, video) {
+    if (!shell) return false;
+    if (document.fullscreenElement === shell) return true;
+    if (shell.classList.contains(PSEUDO_FULLSCREEN)) return true;
+    return Boolean(video && video.webkitDisplayingFullscreen);
+}
+
+function syncFullscreenButton(shell, button, video) {
+    if (!shell || !button) return;
+    const on = fullscreenOn(shell, video);
+    button.classList.toggle("text-sky-300", on);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.title = on ? "退出全屏" : "全屏";
+}
+
+function enterPseudoFullscreen(shell) {
+    shell.classList.add(PSEUDO_FULLSCREEN);
+    document.body.classList.add("hall-pseudo-fs");
+}
+
+function exitPseudoFullscreen(shell) {
+    if (!shell) return;
+    shell.classList.remove(PSEUDO_FULLSCREEN);
+    if (!document.querySelector(`.${PSEUDO_FULLSCREEN}`)) {
+        document.body.classList.remove("hall-pseudo-fs");
+    }
+}
+
+async function toggleFullscreen(shell, video, button) {
+    if (!shell) return;
+    if (document.fullscreenElement) {
+        try {
+            await document.exitFullscreen();
+        } catch {
+            // already left
+        }
+        syncFullscreenButton(shell, button, video);
+        return;
+    }
+    if (shell.classList.contains(PSEUDO_FULLSCREEN)) {
+        exitPseudoFullscreen(shell);
+        syncFullscreenButton(shell, button, video);
+        return;
+    }
+    if (typeof shell.requestFullscreen === "function") {
+        try {
+            // Must stay inside the click for the user-gesture requirement.
+            await shell.requestFullscreen();
+            syncFullscreenButton(shell, button, video);
+            return;
+        } catch {
+            // iPhone Safari rejects this for page elements; try the video.
+        }
+    }
+    if (video && typeof video.webkitEnterFullscreen === "function") {
+        try {
+            video.webkitEnterFullscreen();
+            return;
+        } catch {
+            // fall through to the in-page takeover
+        }
+    }
+    enterPseudoFullscreen(shell);
+    syncFullscreenButton(shell, button, video);
+}
+
+function syncFullscreenButtons() {
+    syncFullscreenButton($("host-shell"), $("btn-host-fullscreen"), $("host-video"));
+    syncFullscreenButton($("member-shell"), $("btn-fullscreen"), $("member-video"));
+}
+
 function changeView(name) {
     showView(name);
     applyWideMode();
@@ -1899,9 +1975,27 @@ function wire() {
         const button = $(id);
         if (button) button.addEventListener("click", toggleWideMode);
     }
-    // Escape leaves wide mode; fullscreen swallows it there, which is fine.
+    // Fullscreen state lives outside the room state: the browser owns one
+    // half of it, the pseudo-fullscreen class the other.
+    document.addEventListener("fullscreenchange", syncFullscreenButtons);
+    for (const id of ["host-video", "member-video"]) {
+        const node = $(id);
+        if (!node) continue;
+        node.addEventListener("webkitbeginfullscreen", syncFullscreenButtons);
+        node.addEventListener("webkitendfullscreen", syncFullscreenButtons);
+    }
+
+    // Escape leaves the in-page fullscreen first, then wide mode; real
+    // fullscreen swallows it there, which is fine.
     document.addEventListener("keydown", (event) => {
-        if (event.key !== "Escape" || !document.body.classList.contains("hall-wide")) return;
+        if (event.key !== "Escape") return;
+        const pseudo = document.querySelector(`.${PSEUDO_FULLSCREEN}`);
+        if (pseudo) {
+            exitPseudoFullscreen(pseudo);
+            syncFullscreenButtons();
+            return;
+        }
+        if (!document.body.classList.contains("hall-wide")) return;
         toggleWideMode();
     });
     wireHostSubtitleControls();
@@ -2056,14 +2150,8 @@ function wire() {
         flashMemberHint(next === 0 ? "静音" : `音量 ${Math.round(next * 100)}%`);
     });
 
-    $("btn-fullscreen").addEventListener("click", async () => {
-        const shell = $("member-shell");
-        try {
-            if (document.fullscreenElement) await document.exitFullscreen();
-            else await shell.requestFullscreen();
-        } catch {
-            toast("当前浏览器不支持全屏", "error");
-        }
+    $("btn-fullscreen").addEventListener("click", () => {
+        toggleFullscreen($("member-shell"), $("member-video"), $("btn-fullscreen"));
     });
 
     // Picture-in-picture is a local view option on both sides: it never changes
@@ -2260,14 +2348,8 @@ function wire() {
             if (value > 0) lastVolume = value;
             syncVolumeIcon();
         });
-        $("btn-host-fullscreen").addEventListener("click", async () => {
-            const shell = $("host-shell");
-            try {
-                if (document.fullscreenElement) await document.exitFullscreen();
-                else await shell.requestFullscreen();
-            } catch {
-                toast("当前浏览器不支持全屏", "error");
-            }
+        $("btn-host-fullscreen").addEventListener("click", () => {
+            toggleFullscreen($("host-shell"), $("host-video"), $("btn-host-fullscreen"));
         });
 
         // Playback rate: the host sets the pace and members follow through the
