@@ -222,7 +222,6 @@
                                 <button id="btn-host-subtitle-menu" class="rounded-lg bg-white/10 px-1 py-2 text-slate-200 backdrop-blur transition hover:bg-white/20 disabled:opacity-40" title="选择字幕轨，成员默认跟随" aria-haspopup="true" aria-expanded="false">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                                 </button>
-                                <div id="host-subtitle-menu" class="hidden absolute bottom-full left-0 mb-2 w-56 overflow-hidden rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur"></div>
                             </div>
                             <select id="host-subtitle-size" class="rounded-lg border-0 bg-white/10 px-2 py-2 text-[11px] text-slate-200 backdrop-blur outline-none" title="字幕字号">
                                 <option value="small">小</option>
@@ -401,7 +400,6 @@
                             <button id="btn-member-subtitle-menu" class="rounded-lg bg-white/10 px-1 py-2 text-slate-200 backdrop-blur transition hover:bg-white/20 disabled:opacity-40" title="选择字幕（仅本机生效）" aria-haspopup="true" aria-expanded="false">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                             </button>
-                            <div id="member-subtitle-menu" class="hidden absolute bottom-full left-0 mb-2 w-56 overflow-hidden rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur"></div>
                         </div>
                         <select id="member-subtitle-size" class="rounded-lg border-0 bg-white/10 px-2 py-2 text-[11px] text-slate-200 backdrop-blur outline-none" title="字幕字号">
                             <option value="small">小</option>
@@ -471,6 +469,11 @@
             <button id="jellyfin-more" class="mt-3 hidden self-center rounded-xl border border-slate-700/60 px-4 py-2 text-[11px] font-semibold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">加载更多</button>
         </div>
     </div>
+
+    <!-- Track lists live outside the video shells: those clip their
+         overflowing children, which used to cut long track lists in half. -->
+    <div id="host-subtitle-menu" class="custom-scrollbar fixed z-50 hidden w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur"></div>
+    <div id="member-subtitle-menu" class="custom-scrollbar fixed z-50 hidden w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur"></div>
 
     <script src="vendor/mp4box.all.min.js"></script>
     <script src="js/hls-0.14.17.min.js"></script>

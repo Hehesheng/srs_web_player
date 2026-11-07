@@ -917,13 +917,35 @@ function closeHostSubtitleMenu() {
     if (button) button.setAttribute("aria-expanded", "false");
 }
 
+// A film can carry two dozen tracks with long names, so the list is drawn
+// above the button and capped to the space the window actually leaves for it.
+// Its element lives outside the video shell: the shell clips its children,
+// which used to cut the top of a long list off the screen.
+function placeSubtitleMenu(menu, button) {
+    if (!menu || !button || menu.classList.contains("hidden")) return;
+    const rect = button.getBoundingClientRect();
+    const margin = 8;
+    const gap = 8;
+    const width = menu.offsetWidth || 320;
+    const room = Math.max(120, rect.top - gap - margin);
+    menu.style.maxHeight = `${Math.round(Math.min(room, window.innerHeight * 0.7))}px`;
+    menu.style.top = `${Math.round(Math.max(margin, rect.top - gap - menu.offsetHeight))}px`;
+    menu.style.bottom = "auto";
+    menu.style.left = `${Math.round(
+        Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
+    )}px`;
+}
+
 function toggleHostSubtitleMenu() {
     const menu = $("host-subtitle-menu");
     const button = $("btn-host-subtitle-menu");
     if (!menu || !button) return;
     const open = menu.classList.toggle("hidden") === false;
     button.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) renderHostSubtitleMenu(hostActiveSubtitle(), true);
+    if (open) {
+        renderHostSubtitleMenu(hostActiveSubtitle(), true);
+        placeSubtitleMenu(menu, button);
+    }
 }
 
 function chooseHostSubtitle(subtitleId) {
@@ -985,6 +1007,7 @@ function renderHostSubtitleMenu(active, force) {
         menu.appendChild(
             subtitleMenuOption(off, "关闭字幕", off ? "播放中" : "", () => chooseHostJellyfinSubtitle("off"))
         );
+        placeSubtitleMenu(menu, $("btn-host-subtitle-menu"));
         return;
     }
     const options = subtitleListOf(hostRoomState);
@@ -998,6 +1021,7 @@ function renderHostSubtitleMenu(active, force) {
         empty.className = "px-2.5 py-1.5 text-[11px] text-slate-500";
         empty.textContent = "当前视频没有可选字幕";
         menu.appendChild(empty);
+        placeSubtitleMenu(menu, $("btn-host-subtitle-menu"));
         return;
     }
     menu.appendChild(subtitleMenuOption(!active, "关闭字幕", "", () => chooseHostSubtitle(null)));
@@ -1009,6 +1033,7 @@ function renderHostSubtitleMenu(active, force) {
             )
         );
     }
+    placeSubtitleMenu(menu, $("btn-host-subtitle-menu"));
 }
 
 function renderHostSubtitles(force) {
@@ -1131,6 +1156,15 @@ function wireHostSubtitleControls() {
     });
     $("host-subtitle-menu").addEventListener("click", (event) => event.stopPropagation());
     document.addEventListener("click", () => closeHostSubtitleMenu());
+    // The list is positioned against the window, so follow a resized window or
+    // a page that scrolls under it.
+    const replaceSubtitleMenus = (event) => {
+        if (event && event.target instanceof Element && event.target.id.endsWith("subtitle-menu")) return;
+        placeSubtitleMenu($("host-subtitle-menu"), $("btn-host-subtitle-menu"));
+        placeSubtitleMenu($("member-subtitle-menu"), $("btn-member-subtitle-menu"));
+    };
+    window.addEventListener("resize", replaceSubtitleMenus);
+    window.addEventListener("scroll", replaceSubtitleMenus, true);
     $("host-subtitle-size").addEventListener("change", (event) => {
         setSubtitleSize(event.target.value);
     });
@@ -1579,7 +1613,10 @@ function toggleMemberSubtitleMenu() {
     if (!menu || !button) return;
     const open = menu.classList.toggle("hidden") === false;
     button.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) renderMemberSubtitleMenu(memberRoomState, memberEffectiveSubtitle(memberRoomState), true);
+    if (open) {
+        renderMemberSubtitleMenu(memberRoomState, memberEffectiveSubtitle(memberRoomState), true);
+        placeSubtitleMenu(menu, button);
+    }
 }
 
 function chooseMemberSubtitle(subtitleId) {
@@ -1601,8 +1638,11 @@ function subtitleMenuOption(selected, label, note, onPick) {
         "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11px] transition hover:bg-white/10 " +
         (selected ? "text-sky-300" : "text-slate-300");
     const name = document.createElement("span");
-    name.className = "truncate";
+    // Long labels wrap onto a second line instead of disappearing behind an
+    // ellipsis: two tracks that differ only in their tail must stay tellable.
+    name.className = "min-w-0 flex-1 break-words leading-snug";
     name.textContent = label;
+    item.title = label;
     item.appendChild(name);
     if (note) {
         const badge = document.createElement("span");
@@ -1637,6 +1677,7 @@ function renderMemberSubtitleMenu(roomState, effective, force) {
         empty.className = "px-2.5 py-1.5 text-[11px] text-slate-500";
         empty.textContent = "当前视频没有可选字幕";
         menu.appendChild(empty);
+        placeSubtitleMenu(menu, $("btn-member-subtitle-menu"));
         return;
     }
     menu.appendChild(
@@ -1657,6 +1698,7 @@ function renderMemberSubtitleMenu(roomState, effective, force) {
             )
         );
     }
+    placeSubtitleMenu(menu, $("btn-member-subtitle-menu"));
 }
 
 function applyMemberSubtitles(roomState) {
