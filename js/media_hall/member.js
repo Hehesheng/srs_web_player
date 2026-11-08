@@ -22,12 +22,16 @@ const FATAL_CLOSE = new Map([
 ]);
 
 export class MemberController {
-    constructor({ video, session, correction, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid, onMediaChanged }) {
+    constructor({ video, session, correction, seekAt, rateCorrection, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid, onMediaChanged }) {
         this.video = video;
         this.session = session;
         // Left unnormalised on purpose: the sync controller is the one place
-        // that decides what "unset" means (`correction !== false`).
+        // that decides what "unset" means (`correction !== false`), which also
+        // makes this the member's live setting -- `setPolicy` is how the room's
+        // 纠偏 control reaches it.
         this.correction = correction;
+        this.seekAt = seekAt;
+        this.rateCorrection = rateCorrection;
         this.onOverlay = onOverlay || (() => {});
         this.onRoomState = onRoomState || (() => {});
         this.onHostState = onHostState || (() => {});
@@ -103,6 +107,8 @@ export class MemberController {
         this.sync = new SyncController({
             video,
             correction: this.correction,
+            seekAt: this.seekAt,
+            rateCorrection: this.rateCorrection,
             send: (payload) => this.send(payload),
             onStats: (stats) => {
                 stats.engine = this.engineEvents;
@@ -541,6 +547,15 @@ export class MemberController {
     correctNow() {
         if (!this.sync) return false;
         return this.sync.correctNow();
+    }
+
+    /** The member's own 纠偏 setting, applied without leaving the room. */
+    setPolicy(policy) {
+        if (!policy) return;
+        if (policy.correction !== undefined) this.correction = policy.correction;
+        if (policy.seekAt !== undefined) this.seekAt = policy.seekAt;
+        if (policy.rateCorrection !== undefined) this.rateCorrection = policy.rateCorrection;
+        if (this.sync) this.sync.setPolicy(policy);
     }
 
     resumeFromGesture() {

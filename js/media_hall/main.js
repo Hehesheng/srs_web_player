@@ -30,20 +30,55 @@ const SUBTITLE_TRACK_SELECTOR = "track[data-hall-subtitle]";
 const SUBTITLE_SIZE_KEY = "hall_subtitle_size";
 const SUBTITLE_SIZE_CLASSES = ["cue-small", "cue-medium", "cue-large"];
 const WIDE_MODE_KEY = "hall_wide_mode";
-// `?fix=0` stops every local correction on the member page.  Not a setting: a
-// way to get one reading that separates the two candidates for a phone that
-// hitches, because they need opposite fixes.  If the picture is smooth with
-// corrections off, our rate and seeks are the stutter and the answer is a
-// gentler one; if it hitches the same, the phone's own pipeline is and no
-// correction will help.  Read at load, because joining a room rewrites the URL
-// to `?room=CODE` and would take the flag with it.
-const HALL_CORRECTION = (() => {
+// The member's own 纠偏 setting: how far the picture may drift before we do
+// something about it.  "off" leaves the device entirely alone, which is also
+// what `?fix=0` is for -- one reading that separates the two candidates for a
+// phone that hitches, because they need opposite fixes: if the picture is
+// smooth with corrections off, our corrections are the stutter and the answer
+// is a gentler one; if it hitches the same, the phone's own pipeline is and no
+// correction will help.  An explicit `?fix=0` beats the stored choice for that
+// page load, and the value is read at load because joining a room rewrites the
+// URL to `?room=CODE` and would take the parameter with it.
+const CORRECT_MODE_KEY = "hall_correct_mode";
+const CORRECT_MODES = ["off", "1", "3", "8"];
+
+/**
+ * iOS, iPadOS (which reports itself as a Mac) and their WebViews.
+ *
+ * The correction a device can afford is not a preference: on a desktop a 5%
+ * `playbackRate` change is invisible and free, so the drift can be ridden out
+ * quietly; on iOS the same write can cost the pipeline a flush and the engine
+ * may ignore it outright, while the phone cannot exceed real time anyway -- so
+ * there the drift is left alone until it is worth one jump.  A device that
+ * quietly refuses the rate is caught at runtime regardless (`rateLocked`).
+ */
+function isIOSLike() {
+    const ua = navigator.userAgent || "";
+    if (/iPad|iPhone|iPod/.test(ua)) return true;
+    return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
+/** The 纠偏 value this page load starts from: URL, then stored, then device. */
+function initialCorrectMode() {
     try {
-        return new URLSearchParams(window.location.search).get("fix") !== "0";
+        if (new URLSearchParams(window.location.search).get("fix") === "0") return "off";
     } catch {
-        return true;
+        // No URL to read; the stored choice decides.
     }
-})();
+    try {
+        const stored = localStorage.getItem(CORRECT_MODE_KEY);
+        if (CORRECT_MODES.includes(stored)) return stored;
+    } catch {
+        // Storage disabled: fall through to the device default.
+    }
+    // One second on a phone: that is where its own hitches put it anyway, and
+    // the reading that came back said a jump there beats a nudge it pays for in
+    // stutter.  A desktop can afford to let the rate work on a smaller drift.
+    return isIOSLike() ? "1" : "3";
+}
+
+const HALL_CORRECT_MODE = initialCorrectMode();
+const HALL_RATE_CORRECTION = !isIOSLike();
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
@@ -1663,8 +1698,10 @@ function memberEngineLabel() {
  * means the picture is being stopped and restarted under the viewer.  失速
  * carries its own split -- 缺N counts the hitches that happened with nothing
  * buffered at the playhead, so the rest are the device stalling with data in
- * hand, which no amount of fetching will fix.  倍速 后面的 写N 是改写次数，
- * 除了房主自己换倍速，现在应该一直不动——纠偏只用跳转，不再动倍速。
+ * hand, which no amount of fetching will fix.  倍速 后面的 写N 是改写次数：
+ * 桌面端会用它把漂移骑过去（每次都可能是一下停顿），手机上纠偏只用跳转，
+ * 那里除了房主自己换倍速应该一直是 0。纠偏N 是这台机器的设置（member 页
+ * 顶栏可选），关掉就是它自己跑的样子。
  */
 function updateMemberHealth(health, stats) {
     const node = $("member-health");
@@ -1707,7 +1744,7 @@ function updateMemberHealth(health, stats) {
     if (stats) {
         const notes = [
             stats.rateLocked ? "固定" : "",
-            health.correction === false ? "纠偏关" : "",
+            health.correction === false ? "纠偏关" : `纠偏${health.seekAt}s`,
             health.rateWrites ? `写${health.rateWrites}` : "",
         ].filter(Boolean).join("/");
         cell("倍速", `${stats.rate.toFixed(2)}x${notes ? `(${notes})` : ""}`);
@@ -1743,6 +1780,18 @@ function setSubtitleSize(size) {
     } catch {
         // ignore
     }
+}
+
+/**
+ * Put the 纠偏 control where the page's stored state says it is.
+ *
+ * The control is the member's own (`setMemberCorrectMode`), but a reading taken
+ * with `?fix=0` has to be visible in it as 关 -- otherwise the switch that
+ * produced the numbers and the switch on screen disagree.
+ */
+function syncCorrectModeControl() {
+    const select = $("member-correct-mode");
+    if (select && select.value !== HALL_CORRECT_MODE) select.value = HALL_CORRECT_MODE;
 }
 
 // -- wide mode -------------------------------------------------------
@@ -2058,6 +2107,35 @@ function correctMemberNow() {
     toast("已校正到目标位置", "success");
 }
 
+/**
+ * The member's own 纠偏 setting, applied to the running picture and remembered.
+ *
+ * It is deliberately local: how much lag and how many jumps a viewer will put
+ * up with is theirs to decide, and one member's choice must not move anyone
+ * else's picture.  `?fix=0` is the same switch from the URL, so the reading it
+ * produces and the 关 setting are the same code path.
+ */
+function setMemberCorrectMode(mode) {
+    const value = CORRECT_MODES.includes(mode) ? mode : "1";
+    const controller = state.member && state.member.controller;
+    if (controller) {
+        controller.setPolicy({
+            correction: value !== "off",
+            seekAt: value === "off" ? undefined : Number(value),
+            rateCorrection: HALL_RATE_CORRECTION,
+        });
+    }
+    try {
+        localStorage.setItem(CORRECT_MODE_KEY, value);
+    } catch {
+        // Storage disabled: the choice still applies to this page load.
+    }
+    toast(
+        value === "off" ? "已关闭自动纠偏（仅本机）" : `漂移超过 ${value} 秒时自动拉回（仅本机）`,
+        "success"
+    );
+}
+
 function toggleMemberSubtitles() {
     if (!memberRoomState || !memberEffectiveSubtitle(memberRoomState)) return;
     memberSubtitlesVisible = !memberSubtitlesVisible;
@@ -2107,7 +2185,9 @@ function startMember(session, room) {
     const controller = new MemberController({
         video: $("member-video"),
         session,
-        correction: HALL_CORRECTION,
+        correction: HALL_CORRECT_MODE !== "off",
+        seekAt: Number(HALL_CORRECT_MODE) || undefined,
+        rateCorrection: HALL_RATE_CORRECTION,
         onOverlay: (key, text, actionLabel, action) => setMemberOverlay(key, text, actionLabel, action),
         onRoomState: (roomState) => {
             if (roomState && roomState.name) $("member-room-name").textContent = roomState.name;
@@ -2303,6 +2383,7 @@ function wire() {
     }
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
+    $("member-correct-mode").addEventListener("change", (event) => setMemberCorrectMode(event.target.value));
     $("btn-member-subtitles").addEventListener("click", toggleMemberSubtitles);
     $("btn-member-subtitle-menu").addEventListener("click", (event) => {
         event.stopPropagation();
@@ -2702,6 +2783,8 @@ function installDebugHook() {
             frozenFor: sync ? Math.round(performance.now() - sync.lastAdvanceAt) : null,
             rateLocked: sync ? sync.rateLocked : null,
             correction: sync ? sync.correction : null,
+            seekAt: sync && sync.correction ? sync.seekAt : null,
+            rateCorrection: sync ? sync.rateCorrecting() : null,
             engine: memberEngineLabel(),
             health: sync ? sync.healthSnapshot() : null,
         };
@@ -2738,6 +2821,7 @@ async function restoreFromUrl() {
 async function init() {
     wire();
     setSubtitleSize(storedSubtitleSize());
+    syncCorrectModeControl();
     wideMode = storedWideMode();
     installDebugHook();
 

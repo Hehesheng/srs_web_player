@@ -397,6 +397,14 @@
                     <span>漂移 <span id="member-drift" class="font-mono text-slate-300">--</span>
                         <button id="btn-sync-correct" type="button" class="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-slate-200 transition hover:bg-sky-500/30 hover:text-sky-200" title="立即校正到目标位置">校正</button>
                     </span>
+                    <span>纠偏
+                        <select id="member-correct-mode" class="rounded bg-white/10 px-1 py-0.5 font-mono text-[10px] text-slate-200 outline-none" title="自动纠偏：漂移超过这个值就拉回目标位置；关掉不再自动纠正。只影响本机。">
+                            <option value="off">关</option>
+                            <option value="1">1 秒</option>
+                            <option value="3">3 秒</option>
+                            <option value="8">8 秒</option>
+                        </select>
+                    </span>
                     <span>D <span id="member-d" class="font-mono text-slate-300">0.5s</span></span>
                     <span>倍速 <span id="member-rate" class="font-mono text-slate-300">1.00x</span></span>
                     <button id="btn-leave-room" type="button"
