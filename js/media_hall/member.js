@@ -233,7 +233,7 @@ export class MemberController {
         if (room.name) this.session.room_name = room.name;
         this.applyMedia(room);
         this.onRoomState(room, initial);
-        if (Array.isArray(room.members)) this.onMembers(room.members);
+        if (Array.isArray(room.members)) this.onMembers(room.members, room.host_name);
         if (room.ended) {
             this.handleEnded();
             return;
@@ -411,7 +411,7 @@ export class MemberController {
             if (event === "seek" || event === "resync") this.sync.followNow(true);
         }
         this.onHostState(host, event);
-        if (Array.isArray(payload.members)) this.onMembers(payload.members);
+        if (Array.isArray(payload.members)) this.onMembers(payload.members, payload.host_name);
         if (host.online === false) {
             this.onOverlay("offline", "房主已离线，等待重连…（持续离线将结束房间）", null, null);
         } else {

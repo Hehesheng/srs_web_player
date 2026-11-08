@@ -90,6 +90,8 @@ let lastHealthText = "";
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
+// 房主在成员列表里显示的名字。空 = 服务端没设过，两边都显示「房主」。
+let hostDisplayName = "";
 let hostSubtitleMenuSignature = "";
 // The burnt-in track to restore when the host turns subtitles back on.
 let lastBurnedSubtitle;
@@ -397,7 +399,12 @@ async function createRoom() {
     setButtonsBusy(button, true, "正在创建…");
     try {
         // The room starts empty; the host picks what to watch from inside it.
-        const data = await request("/hall/api/rooms", { method: "POST", body: { name } });
+        // A name the host set in an earlier room comes along, so the member list
+        // says the same thing without them having to type it again.
+        const data = await request("/hall/api/rooms", {
+            method: "POST",
+            body: { name, host_name: storedHostName() },
+        });
         const session = {
             room_id: data.room_id,
             room_code: data.room_code,
@@ -559,7 +566,8 @@ function startRoomListPolling() {
 }
 
 // -- host ------------------------------------------------------------
-function updateHostMembers(members) {
+function updateHostMembers(members, hostName) {
+    if (typeof hostName === "string") hostDisplayName = hostName;
     const list = Array.isArray(members) ? members : [];
     const connected = list.filter((member) => member.connected).length;
     const display = list.map((member) => ({
@@ -567,9 +575,82 @@ function updateHostMembers(members) {
         name: member.connected ? member.name : `${member.name}（离线）`,
     }));
     $("host-member-count").textContent = String(connected);
+    // The host's own row is here too: it is the one place to check what the
+    // members see above their own names.
     renderMembers($("host-members"), display, {
+        hostName: hostLabel(),
         emptyText: "还没有成员加入",
     });
+}
+
+/** What the host is called everywhere: their own name, or the default label. */
+function hostLabel() {
+    return hostDisplayName || "房主";
+}
+
+const HOST_NAME_KEY = "hall_host_name";
+
+/** 这台浏览器上次用的房主名：用来预填，也用来开新房时带上。 */
+function storedHostName() {
+    try {
+        return (localStorage.getItem(HOST_NAME_KEY) || "").trim();
+    } catch {
+        return "";
+    }
+}
+
+function rememberHostName(name) {
+    try {
+        if (name) localStorage.setItem(HOST_NAME_KEY, name);
+        else localStorage.removeItem(HOST_NAME_KEY);
+    } catch {
+        // 隐私模式或配额满：名字就留不下来，房间里的名字仍然是对的
+    }
+}
+
+function showHostNameRow(show) {
+    const row = $("host-name-row");
+    if (!row) return;
+    row.classList.toggle("hidden", !show);
+    row.classList.toggle("flex", show);
+    $("host-name-hint")?.classList.toggle("hidden", !show);
+    if (!show) return;
+    const input = $("host-name-input");
+    if (input) {
+        // 已经设过的名字优先，其次才是这台浏览器记住的那个。
+        input.value = hostDisplayName || storedHostName();
+        input.focus();
+        input.select();
+    }
+}
+
+async function submitHostName() {
+    const input = $("host-name-input");
+    const button = $("btn-host-name-save");
+    const session = state.room;
+    if (!input || !button || button.disabled || !session || !state.host) return;
+    const name = (input.value || "").trim();
+    setButtonsBusy(button, true, "保存中…");
+    try {
+        const data = await request(
+            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/host_name`,
+            {
+                method: "POST",
+                headers: { "X-Host-Token": session.host_token },
+                body: { name },
+            }
+        );
+        const settled = String((data && data.host_name) || "");
+        rememberHostName(settled);
+        // 服务端会广播一次房间状态，这里顺手先把自己这份列表刷新，省掉一轮往返。
+        updateHostMembers(hostRoomState ? hostRoomState.members : [], settled);
+        showHostNameRow(false);
+        toast(settled ? `房主名已改为「${settled}」` : "已恢复显示「房主」", "success");
+    } catch (error) {
+        toast(error.message || "改房主名失败", "error");
+    } finally {
+        setButtonsBusy(button, false);
+    }
 }
 
 // -- playlist --------------------------------------------------------
@@ -1227,7 +1308,7 @@ function applyHostRoomState(roomState) {
     if (ts) hostRoomStateTs = ts;
     hostRoomState = roomState;
     noteStream(roomState, roomState.media_url);
-    if (Array.isArray(roomState.members)) updateHostMembers(roomState.members);
+    if (Array.isArray(roomState.members)) updateHostMembers(roomState.members, roomState.host_name);
     if (Array.isArray(roomState.playlist)) setHostPlaylist(roomState.playlist);
     updateHostMediaLabel(roomState.media);
     renderHostSubtitles();
@@ -1453,7 +1534,7 @@ function startHost(session, file, room) {
             else if (kind === "closed") setStatusBadge("host-status", "连接断开", "bad");
             else if (kind === "ended") setStatusBadge("host-status", "房间已结束", "muted");
         },
-        onMembers: (members) => updateHostMembers(members),
+        onMembers: (members, hostName) => updateHostMembers(members, hostName),
         onRoomState: (roomState) => applyHostRoomState(roomState),
         onError: (message, detail) => {
             if (detail && detail.kind === "media") {
@@ -1679,9 +1760,10 @@ function renderMemberPlaylist(roomState) {
     });
 }
 
-function updateMemberMembers(members) {
+function updateMemberMembers(members, hostName) {
+    if (typeof hostName === "string") hostDisplayName = hostName;
     renderMembers($("member-members"), members, {
-        hostName: "房主",
+        hostName: hostLabel(),
         selfId: state.member && state.member.session ? state.member.session.member_id : null,
         emptyText: "房间里只有你",
     });
@@ -2309,7 +2391,7 @@ function startMember(session, room) {
     setStatusBadge("member-host-badge", "连接中", "muted");
     setMemberStatus("正在连接房间…");
     if (room) {
-        updateMemberMembers(room.members || []);
+        updateMemberMembers(room.members || [], room.host_name);
         renderMemberPlaylist(room);
         if (!room.media) setMemberStatus("等待房主添加内容…");
         if (room.host && room.host.online !== false) {
@@ -2365,7 +2447,7 @@ function startMember(session, room) {
                 setMemberOverlay("paused", "房主已暂停", null, null);
             }
         },
-        onMembers: (members) => updateMemberMembers(members),
+        onMembers: (members, hostName) => updateMemberMembers(members, hostName),
         onConnected: () => {
             setMemberStatus("已连接，正在同步…");
         },
@@ -2520,6 +2602,21 @@ function wire() {
             }
         });
     }
+    // The host's own row in the member list: one place to set what the members
+    // read above their own names.
+    $("btn-host-name")?.addEventListener("click", () => {
+        const row = $("host-name-row");
+        showHostNameRow(!row || row.classList.contains("hidden"));
+    });
+    $("btn-host-name-save")?.addEventListener("click", submitHostName);
+    $("host-name-input")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            submitHostName();
+        } else if (event.key === "Escape") {
+            showHostNameRow(false);
+        }
+    });
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
     $("btn-copy-health").addEventListener("click", copyMemberHealth);

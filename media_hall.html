@@ -366,7 +366,15 @@
                     <p class="mt-4 text-[11px] leading-relaxed text-slate-500">请保持此标签页打开。关闭或休眠后，未被成员缓存的分片将无法读取。</p>
                 </div>
                 <div class="glass-card rounded-2xl p-5">
-                    <h2 class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">成员</h2>
+                    <div class="mb-3 flex items-center justify-between">
+                        <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">成员</h2>
+                        <button id="btn-host-name" class="rounded-lg border border-slate-700/60 px-2 py-1 text-[10px] text-slate-400 transition hover:border-sky-500/50 hover:text-sky-300">房主名</button>
+                    </div>
+                    <div id="host-name-row" class="mb-3 hidden flex-col gap-2 sm:flex-row sm:items-center">
+                        <input id="host-name-input" maxlength="32" autocomplete="off" placeholder="房主名，如 客厅" class="min-w-0 flex-1 rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm outline-none transition placeholder:text-slate-600 focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20">
+                        <button id="btn-host-name-save" class="rounded-xl bg-sky-500 px-3 py-2 text-xs font-bold text-white transition hover:bg-sky-400 disabled:opacity-50">保存</button>
+                    </div>
+                    <p id="host-name-hint" class="mb-3 hidden text-[11px] text-slate-500">成员那边看到的就是这个名字；留空恢复成「房主」。</p>
                     <ul id="host-members" class="custom-scrollbar max-h-44 space-y-2 overflow-y-auto text-sm text-slate-400">
                         <li class="text-xs italic text-slate-600">还没有成员加入</li>
                     </ul>

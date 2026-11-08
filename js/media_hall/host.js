@@ -429,7 +429,9 @@ export class HostController {
                 break;
             case "auth_ok":
                 this.onStatus("connected");
-                if (Array.isArray(message.members)) this.onMembers(message.members);
+                if (Array.isArray(message.members)) {
+                    this.onMembers(message.members, message.room && message.room.host_name);
+                }
                 if (message.room) this.onRoomState(message.room);
                 break;
             case "reconnecting":
@@ -439,7 +441,9 @@ export class HostController {
                 this.onMetrics({ buffered: Number(message.buffered) || 0 });
                 break;
             case "room":
-                if (Array.isArray(message.members)) this.onMembers(message.members);
+                if (Array.isArray(message.members)) {
+                    this.onMembers(message.members, message.data && message.data.host_name);
+                }
                 if (message.data && message.data.type === "room_state") {
                     this.onRoomState(message.data);
                     if (message.data.ended) this.onStatus("ended");

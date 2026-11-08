@@ -128,7 +128,12 @@ export function attachHls(video, url, { onError, onEvent, startAt = 0 } = {}) {
         // playlist only holds a handful of segments.
         liveSyncDurationCount: 2,
         liveMaxLatencyDurationCount: 8,
-        maxBufferLength: 30,
+        // How far ahead of the playhead the player keeps loading.  Measured on
+        // the real source: the plateau sits one fragment above this number, so
+        // 58 is what a "60 s ahead" readout actually comes from.  The price is
+        // that much video in memory per viewer (about 43 MB at 6 Mbps), thrown
+        // away whenever the host seeks or the transcode restarts.
+        maxBufferLength: 58,
         maxMaxBufferLength: 60,
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 4,
