@@ -1,52 +1,63 @@
 /**
- * Jellyfin source for the host view: sign in, browse the library, pick an item.
+ * Jellyfin source for the host view: point it at a server, browse, pick an item.
  *
- * The access token belongs to the host alone.  It is stored in this browser
- * for a week and handed to the room server, which keeps it in memory; members
- * never see it, and the server proxies every byte they play.
+ * There is no Jellyfin configuration anywhere but here: the host types a URL
+ * and an API key, this browser remembers the pair, and the room server is told
+ * only when the host connects (and keeps it in memory for the room's life).
+ * The key never reaches a member, and the server proxies every byte they play.
  */
 
 const STORAGE_KEY = "hall_jellyfin_session";
-const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 60;
 
-export function storedJellyfinToken() {
+/** The last server this browser connected to: {url, token, user_id, user_name}. */
+export function storedJellyfinConfig() {
     let saved = null;
     try {
         saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     } catch {
         saved = null;
     }
-    if (!saved || !saved.token) return null;
-    if (saved.exp && Number(saved.exp) < Date.now()) {
-        forgetJellyfinToken();
+    // A record from before addresses moved to the browser has a token but no
+    // url; it cannot be used, so it is dropped and the host is asked once.
+    if (!saved || !saved.token || !saved.url) {
+        if (saved) forgetJellyfinConfig();
         return null;
     }
     return saved;
 }
 
-export function saveJellyfinToken(token, userName, userId) {
-    if (!token) return;
+export function saveJellyfinConfig(url, token, userName, userId) {
+    if (!url || !token) return;
     try {
         localStorage.setItem(
             STORAGE_KEY,
             JSON.stringify({
+                url,
                 token,
                 user_name: userName || "",
                 user_id: userId || "",
-                exp: Date.now() + TOKEN_TTL_MS,
             })
         );
     } catch {
-        // private mode or full quota: the token simply is not remembered
+        // private mode or full quota: the config simply is not remembered
     }
 }
 
-export function forgetJellyfinToken() {
+export function forgetJellyfinConfig() {
     try {
         localStorage.removeItem(STORAGE_KEY);
     } catch {
         // ignore
+    }
+}
+
+/** The host part of a URL, for one-line messages: "jellyfin.example.com". */
+function urlHost(url) {
+    try {
+        return new URL(url).host || url;
+    } catch {
+        return url || "";
     }
 }
 
@@ -95,31 +106,34 @@ export class JellyfinPicker {
         return this.api("/jellyfin/status");
     }
 
-    async signIn(username, password) {
+    /** Hand the room a server address and an API key; both come from here. */
+    async connect(url, token, userId) {
         const data = await this.api("/jellyfin/session", {
             method: "POST",
-            body: { username, password },
+            body: { url, token, user_id: userId || undefined },
         });
         this.libraries = Array.isArray(data.libraries) ? data.libraries : [];
         return data;
     }
 
-    async adopt(token, userId) {
-        const data = await this.api("/jellyfin/session", {
-            method: "POST",
-            body: { token, user_id: userId || undefined },
-        });
-        this.libraries = Array.isArray(data.libraries) ? data.libraries : [];
-        return data;
+    // -- config row ----------------------------------------------------
+    /** Prefill the two fields from the last config, if there is one. */
+    fillConfigRow() {
+        const saved = storedJellyfinConfig();
+        const url = document.getElementById("host-jellyfin-url");
+        const key = document.getElementById("host-jellyfin-token");
+        if (url && saved && !url.value) url.value = saved.url || "";
+        if (key && saved && !key.value) key.value = saved.token || "";
+        return saved;
     }
 
-    // -- login row -----------------------------------------------------
-    showLogin(show, message = "") {
-        const row = document.getElementById("host-jellyfin-login");
+    showConfig(show, message = "") {
+        const row = document.getElementById("host-jellyfin-config");
         const hint = document.getElementById("host-jellyfin-hint");
         if (!row) return;
         row.classList.toggle("hidden", !show);
         row.classList.toggle("flex", show);
+        if (show) this.fillConfigRow();
         if (hint) {
             hint.classList.toggle("hidden", !show);
             hint.classList.remove("text-rose-300");
@@ -130,12 +144,26 @@ export class JellyfinPicker {
                 hint.classList.add("text-rose-300");
             } else {
                 hint.textContent =
-                    "用你的 Jellyfin 账号登录。密码只用于这一次换取令牌，浏览器只记住 7 天有效的访问令牌。";
+                    "填 Jellyfin 的网址和一枚 API 密钥（Jellyfin 控制台 → 高级 → API 密钥）。密钥只存在这台浏览器里，服务器不保存任何配置。";
             }
         }
         if (show) {
-            const user = document.getElementById("host-jellyfin-user");
-            if (user && !user.value) user.focus();
+            const url = document.getElementById("host-jellyfin-url");
+            if (url && !url.value) url.focus();
+        }
+    }
+
+    /**
+     * Open the config row with what we already have, so "换一个服务器" is one
+     * edit away: the old address and key are both there to be corrected.
+     */
+    openConfig() {
+        this.close();
+        this.showConfig(true);
+        const key = document.getElementById("host-jellyfin-token");
+        if (key) {
+            key.focus();
+            key.select();
         }
     }
 
@@ -155,14 +183,14 @@ export class JellyfinPicker {
             this.toast("这台服务器的媒体厅没有启用 Jellyfin 源", "error");
             return;
         }
+        const saved = storedJellyfinConfig();
         if (state.authenticated) {
-            this.showLogin(false);
-            const known = storedJellyfinToken();
-            if (known) {
+            this.showConfig(false);
+            if (saved) {
                 // Re-reads the library list for the dropdown; a failure here
                 // only costs the picker, not the session the room already has.
                 try {
-                    await this.adopt(known.token, known.user_id);
+                    await this.connect(saved.url, saved.token, saved.user_id);
                 } catch {
                     // ignore
                 }
@@ -170,53 +198,56 @@ export class JellyfinPicker {
             await this.open();
             return;
         }
-        const saved = storedJellyfinToken();
         if (saved) {
+            // The remembered server is used without asking again.  A failure
+            // keeps the fields filled in, so the host only has to correct
+            // whichever half is wrong instead of typing both.
             try {
-                await this.adopt(saved.token, saved.user_id);
+                await this.connect(saved.url, saved.token, saved.user_id);
+                this.showConfig(false);
                 await this.open();
                 return;
             } catch (error) {
-                // The token expired or was revoked on the Jellyfin side.
-                forgetJellyfinToken();
-                this.showLogin(true, error.message || "记住的登录已失效，请重新登录");
+                this.showConfig(true, error.message || "记住的 Jellyfin 配置连不上，请检查网址和密钥");
                 return;
             }
         }
-        this.showLogin(true);
+        this.showConfig(true);
     }
 
-    async submitLogin() {
-        const userInput = document.getElementById("host-jellyfin-user");
-        const passInput = document.getElementById("host-jellyfin-pass");
-        const button = document.getElementById("btn-jellyfin-login");
-        if (!userInput || !passInput || !button || button.disabled) return;
-        const username = (userInput.value || "").trim();
-        const password = passInput.value || "";
-        if (!username || !password) {
-            this.showLogin(true, "请填写用户名和密码");
+    async submitConnect() {
+        const urlInput = document.getElementById("host-jellyfin-url");
+        const keyInput = document.getElementById("host-jellyfin-token");
+        const button = document.getElementById("btn-jellyfin-connect");
+        if (!urlInput || !keyInput || !button || button.disabled) return;
+        const url = (urlInput.value || "").trim();
+        const token = (keyInput.value || "").trim();
+        if (!url || !token) {
+            this.showConfig(true, "请填写 Jellyfin 网址和密钥");
             return;
         }
         const label = button.textContent;
         button.disabled = true;
-        button.textContent = "登录中…";
+        button.textContent = "连接中…";
         try {
-            const data = await this.signIn(username, password);
-            // Only the token is remembered; the password is dropped right here.
-            passInput.value = "";
-            if (data.token) {
-                saveJellyfinToken(
-                    data.token,
-                    data.jellyfin && data.jellyfin.user_name,
-                    data.jellyfin && data.jellyfin.user_id
-                );
-            }
-            this.showLogin(false);
-            const name = (data.jellyfin && data.jellyfin.user_name) || username;
-            this.toast(`已登录 Jellyfin：${name}`, "success");
+            const data = await this.connect(url, token);
+            const account = (data.jellyfin && data.jellyfin.user_name) || "";
+            // The server hands back the address it settled on (a bare host
+            // became https://…), so the field and the record agree.
+            const settled = data.url || url;
+            urlInput.value = settled;
+            saveJellyfinConfig(
+                settled,
+                token,
+                account,
+                data.jellyfin && data.jellyfin.user_id
+            );
+            this.showConfig(false);
+            const host = urlHost(settled);
+            this.toast(account ? `已连接 Jellyfin：${host}（${account}）` : `已连接 Jellyfin：${host}`, "success");
             await this.open();
         } catch (error) {
-            this.showLogin(true, error.message || "登录失败");
+            this.showConfig(true, error.message || "连接 Jellyfin 失败");
         } finally {
             button.disabled = false;
             button.textContent = label;
@@ -231,14 +262,17 @@ export class JellyfinPicker {
             const element = document.getElementById(id);
             if (element) element.addEventListener(event, handler);
         };
-        on("btn-jellyfin-login", "click", () => this.submitLogin());
-        on("btn-jellyfin-cancel", "click", () => this.showLogin(false));
-        on("host-jellyfin-pass", "keydown", (event) => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                this.submitLogin();
-            }
-        });
+        on("btn-jellyfin-connect", "click", () => this.submitConnect());
+        on("btn-jellyfin-cancel", "click", () => this.showConfig(false));
+        for (const id of ["host-jellyfin-url", "host-jellyfin-token"]) {
+            on(id, "keydown", (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    this.submitConnect();
+                }
+            });
+        }
+        on("btn-jellyfin-config", "click", () => this.openConfig());
         on("jellyfin-close", "click", () => this.close());
         on("jellyfin-more", "click", () => this.loadMore());
         on("jellyfin-library", "change", (event) => this.jumpToLibrary(event.target.value || ""));
@@ -277,14 +311,14 @@ export class JellyfinPicker {
         this.loadItems(true);
     }
 
-    /** Drop everything tied to the previous room; the token survives. */
+    /** Drop everything tied to the previous room; the config survives. */
     reset() {
         this.libraries = [];
         this.libraryId = "";
         this.trail = [];
         this.items = [];
         this.total = 0;
-        this.showLogin(false);
+        this.showConfig(false);
         this.close();
         const search = document.getElementById("jellyfin-search");
         if (search) search.value = "";
@@ -363,8 +397,12 @@ export class JellyfinPicker {
         const select = document.getElementById("jellyfin-library");
         const who = document.getElementById("jellyfin-who");
         if (who) {
-            const saved = storedJellyfinToken();
-            who.textContent = saved && saved.user_name ? `已登录 ${saved.user_name}` : "已登录";
+            // Which server this room is browsing, and as whom: the host picks
+            // both, so the header is where they can be checked at a glance.
+            const saved = storedJellyfinConfig();
+            const host = saved ? urlHost(saved.url) : "";
+            const name = (saved && saved.user_name) || "";
+            who.textContent = [host, name && `（${name}）`].filter(Boolean).join("") || "--";
         }
         if (!select) return;
         select.replaceChildren();
@@ -458,8 +496,10 @@ export class JellyfinPicker {
             if (seq !== this.seq) return;
             this.setStatus(error.message || "读取片库失败", "error");
             if (error.code === "JELLYFIN_AUTH_REQUIRED" || error.code === "JELLYFIN_AUTH_FAILED") {
-                forgetJellyfinToken();
-                this.showLogin(true, "登录已失效，请重新登录");
+                // The room lost its connection: the remembered config is still
+                // in the fields, so all that is left is to connect again.
+                this.close();
+                this.showConfig(true, "Jellyfin 连接已失效，请重新填写网址和密钥");
             }
         } finally {
             if (seq === this.seq) this.loadingMore = false;

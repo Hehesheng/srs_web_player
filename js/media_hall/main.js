@@ -2473,12 +2473,12 @@ function wire() {
     if (addMediaInput) {
         $("btn-add-file").addEventListener("click", () => {
             showUrlRow(false);
-            jellyfin().showLogin(false);
+            jellyfin().showConfig(false);
             addMediaInput.click();
         });
         $("btn-add-url").addEventListener("click", () => {
             showUrlRow(false);
-            jellyfin().showLogin(false);
+            jellyfin().showConfig(false);
             showUrlRow(true);
         });
         $("btn-add-jellyfin")?.addEventListener("click", () => {
