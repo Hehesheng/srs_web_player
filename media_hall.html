@@ -28,6 +28,11 @@
         #member-video.cue-small::cue { font-size: 90%; background: rgba(0, 0, 0, 0.55); }
         #member-video.cue-medium::cue { font-size: 120%; background: rgba(0, 0, 0, 0.55); }
         #member-video.cue-large::cue { font-size: 160%; background: rgba(0, 0, 0, 0.55); }
+        /* 实时分析：收起时也带一行读数，所以去掉 details 默认的小三角，用右边的
+           箭头表示开合。 */
+        #member-analysis > summary { list-style: none; }
+        #member-analysis > summary::-webkit-details-marker { display: none; }
+        #member-analysis[open] .analysis-chevron { transform: rotate(180deg); }
         /* Wide mode: the player fills the window and the spare cards fold away. */
         body.hall-wide { padding-bottom: 0; overflow: hidden; }
         body.hall-wide main { max-width: none; padding: 0.75rem 1rem; }
@@ -467,76 +472,6 @@
                 </div>
             </div>
 
-            <!-- 实时分析：默认常开，?debug=0 关掉。放在播放器下面而不是顶栏，
-                 是因为它是一屏数据；顶栏只留一眼要看的（房间 / RTT / 漂移 /
-                 纠偏 / 倍速）。小格是一眼看的读数，曲线是最近一分钟的趋势，
-                 最下面那行等宽字是全量原始数据（复制数据 按钮就复制它）。 -->
-            <div id="member-analysis" class="wide-hide glass-card mt-5 rounded-2xl p-5">
-                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <h2 class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">
-                        <span class="relative flex h-2 w-2">
-                            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span>
-                            <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
-                        </span>
-                        实时分析
-                    </h2>
-                    <button id="btn-copy-health" type="button"
-                        class="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制数据</button>
-                </div>
-
-                <div id="member-tiles" data-tiles class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"></div>
-
-                <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    <div data-chart="drift" data-color="#38bdf8" class="rounded-2xl border border-sky-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
-                        <div class="mb-1 flex items-center gap-2">
-                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-400"></span>
-                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-sky-300">漂移</span>
-                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
-                        </div>
-                        <canvas class="h-32 w-full"></canvas>
-                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
-                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
-                        </div>
-                    </div>
-                    <div data-chart="buffer" data-color="#34d399" class="rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
-                        <div class="mb-1 flex items-center gap-2">
-                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400"></span>
-                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-emerald-300">前向缓存</span>
-                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
-                        </div>
-                        <canvas class="h-32 w-full"></canvas>
-                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
-                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
-                        </div>
-                    </div>
-                    <div data-chart="advance" data-color="#fbbf24" class="rounded-2xl border border-amber-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
-                        <div class="mb-1 flex items-center gap-2">
-                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400"></span>
-                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-amber-300">推进</span>
-                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
-                        </div>
-                        <canvas class="h-32 w-full"></canvas>
-                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
-                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
-                        </div>
-                    </div>
-                    <div data-chart="rtt" data-color="#a78bfa" class="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
-                        <div class="mb-1 flex items-center gap-2">
-                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400"></span>
-                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-violet-300">网络延迟</span>
-                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
-                        </div>
-                        <canvas class="h-32 w-full"></canvas>
-                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
-                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="mt-4 border-t border-white/5 pt-3">
-                    <div id="member-health" class="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-slate-500"></div>
-                </div>
-            </div>
 
             <div class="wide-hide mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3">
                 <div class="glass-card rounded-2xl p-5 lg:col-span-2">
@@ -556,6 +491,81 @@
                     </ul>
                 </div>
             </div>
+            <!-- 实时分析：默认折叠在最下面，`?debug=0` 连这块一起关掉。折叠着的那
+                 一行也带着关键读数（缓存/卡顿/失速/跳转），扫一眼不用展开；展开才
+                 是小格（一眼看的数）、四条一分钟曲线、以及最下面那行可以整行复制
+                 的原始数据（复制数据 按钮复制它）。 -->
+            <details id="member-analysis" class="wide-hide glass-card mt-5 rounded-2xl">
+                <summary class="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 p-5">
+                    <h2 class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">
+                        <span class="relative flex h-2 w-2">
+                            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span>
+                            <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
+                        </span>
+                        实时分析
+                    </h2>
+                    <span data-brief class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 font-mono text-[10px] text-slate-500">--</span>
+                    <svg class="analysis-chevron h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </summary>
+
+                    <div class="px-5 pb-5">
+                        <div id="member-tiles" data-tiles class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"></div>
+
+                        <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                            <div data-chart="drift" data-color="#38bdf8" class="rounded-2xl border border-sky-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                                <div class="mb-1 flex items-center gap-2">
+                                    <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-400"></span>
+                                    <span class="truncate text-[10px] font-bold uppercase tracking-widest text-sky-300">漂移</span>
+                                    <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                                </div>
+                                <canvas class="h-32 w-full"></canvas>
+                                <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                                    <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                                </div>
+                            </div>
+                            <div data-chart="buffer" data-color="#34d399" class="rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                                <div class="mb-1 flex items-center gap-2">
+                                    <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400"></span>
+                                    <span class="truncate text-[10px] font-bold uppercase tracking-widest text-emerald-300">前向缓存</span>
+                                    <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                                </div>
+                                <canvas class="h-32 w-full"></canvas>
+                                <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                                    <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                                </div>
+                            </div>
+                            <div data-chart="advance" data-color="#fbbf24" class="rounded-2xl border border-amber-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                                <div class="mb-1 flex items-center gap-2">
+                                    <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400"></span>
+                                    <span class="truncate text-[10px] font-bold uppercase tracking-widest text-amber-300">推进</span>
+                                    <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                                </div>
+                                <canvas class="h-32 w-full"></canvas>
+                                <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                                    <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                                </div>
+                            </div>
+                            <div data-chart="rtt" data-color="#a78bfa" class="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                                <div class="mb-1 flex items-center gap-2">
+                                    <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400"></span>
+                                    <span class="truncate text-[10px] font-bold uppercase tracking-widest text-violet-300">网络延迟</span>
+                                    <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                                </div>
+                                <canvas class="h-32 w-full"></canvas>
+                                <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                                    <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 flex items-start gap-3 border-t border-white/5 pt-3">
+                            <div id="member-health" class="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-slate-500"></div>
+                            <button id="btn-copy-health" type="button"
+                                class="shrink-0 rounded-lg border border-slate-700/60 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制数据</button>
+                        </div>
+                    </div>
+            </details>
+
         </section>
     </main>
 

@@ -7,11 +7,13 @@
  * 自适应，漂移和推进各有一条参考线（0 和 1.00）—— 漂移在参考线上面是「跑在房主
  * 前面」，下面是「落后」，这两件事的修法完全相反，所以它必须一眼看得出来。
  *
- * 这张卡片现在默认就开着，还常常开在手机上，所以有两处克制：
- *   - 看不见的时候不碰画布（宽屏模式、?debug=0、页面切到后台），采样照常进环形
- *     缓冲，因此退出来时曲线是连续的，不会空一段；
- *   - 数字格的 DOM 只在文字真的变了才重建 —— 统计每 400ms 来一次，不该每 400ms
- *     重建十一个节点。
+ * 这张卡片在最下面、默认收起：收起时只有 summary 上那一行读数和它旁边的箭头，
+ * 所以那一行必须自己说清楚有没有事（有问题的数字会把它染成琥珀色）。也因为
+ * 常开在手机上，这里有两处克制：
+ *   - 看不见的时候不碰画布（收起、宽屏模式、?debug=0、页面切到后台），采样照常
+ *     进环形缓冲，因此展开时曲线是连续的，不会空一段；
+ *   - 数字格的 DOM 只在文字真的变了才重建（而且收起时连重建都省了，展开时补上）
+ *     —— 统计每 400ms 来一次，不该每 400ms 重建十一个节点。
  */
 
 // 和 rtc_player 一样是 60 个点；这里一秒一个，所以窗口是一分钟。
@@ -171,6 +173,12 @@ const TONES = {
     bad: "text-rose-300",
 };
 
+// 收起时那一行读数：平时是灰的，出了事才亮起来 —— 折叠着也看得见。
+const BRIEF_TONES = {
+    muted: "text-slate-500",
+    warn: "text-amber-300",
+};
+
 function iconNode(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -212,7 +220,10 @@ export class AnalysisPanel {
     constructor(root) {
         this.root = root;
         this.tileHost = root.querySelector("[data-tiles]");
+        this.briefNode = root.querySelector("[data-brief]");
         this.tileKey = "";
+        this.briefKey = "";
+        this.tiles = null;
         this.charts = {};
         for (const node of root.querySelectorAll("[data-chart]")) {
             this.charts[node.dataset.chart] = {
@@ -225,23 +236,60 @@ export class AnalysisPanel {
             };
         }
         this.lastSampleAt = 0;
+        // 收起时什么都不画，所以展开的这一刻要把攒下来的东西一次性补上，
+        // 否则要等到下一个采样拍（最长一秒）才有东西看。
+        root.addEventListener("toggle", () => {
+            if (root.open) this.expand();
+        });
     }
 
     /**
-     * `tiles` 是 [{icon, label, value, note, tone}]，`samples` 是各条曲线的当前
-     * 读数（drift / buffer / advance / rtt，缺的就是这一拍没读到）。
+     * `tiles` 是 [{icon, label, value, note, tone}]，`brief` 是 {text, tone}（收起时
+     * summary 上那一行），`samples` 是各条曲线的当前读数（drift / buffer / advance /
+     * rtt，缺的就是这一拍没读到）。
      */
-    update({ tiles, samples } = {}) {
+    update({ tiles, brief, samples } = {}) {
         if (tiles) this.renderTiles(tiles);
+        if (brief) this.renderBrief(brief);
         this.sample(samples);
     }
 
+    renderBrief({ text, tone }) {
+        if (!this.briefNode) return;
+        this.briefNode.className = `flex min-w-0 flex-1 flex-wrap items-center gap-x-3 font-mono text-[10px] ${BRIEF_TONES[tone] || BRIEF_TONES.muted}`;
+        if (this.briefKey === text) return;
+        this.briefKey = text;
+        // 一项一个 span（间距交给 gap）：手机上这行会折行，折了也不该以一个孤零零
+        // 的分隔点开头。中间那个空格只是留给 textContent 的，flex 不会把它排出来。
+        const frag = document.createDocumentFragment();
+        for (const part of text.split(" · ")) {
+            const span = document.createElement("span");
+            span.textContent = part;
+            frag.append(span, " ");
+        }
+        this.briefNode.replaceChildren(frag);
+    }
+
+    /** 收起时只记住，不写 DOM —— 展开时由 expand() 一次补上。 */
     renderTiles(tiles) {
         if (!this.tileHost) return;
         const key = tiles.map((tile) => `${tile.icon}|${tile.label}|${tile.value}|${tile.note || ""}|${tile.tone || ""}`).join("~");
         if (key === this.tileKey) return;
         this.tileKey = key;
-        this.tileHost.replaceChildren(...tiles.map(tileNode));
+        this.tiles = tiles;
+        if (!this.visible()) return;
+        this.paintTiles();
+    }
+
+    paintTiles() {
+        if (!this.tileHost || !this.tiles) return;
+        this.tileHost.replaceChildren(...this.tiles.map(tileNode));
+    }
+
+    /** 刚展开：把现在这批数字和曲线立刻画出来。 */
+    expand() {
+        this.paintTiles();
+        this.paint();
     }
 
     sample(samples) {
@@ -256,6 +304,10 @@ export class AnalysisPanel {
         // 所以再打开时曲线是连续的，不会空一段）。
         const drift = this.charts.drift;
         this.root.dataset.samples = String(drift ? drift.spark.values.length : 0);
+        this.paint();
+    }
+
+    paint() {
         if (!this.visible()) return;
         for (const chart of Object.values(this.charts)) {
             chart.spark.draw();
@@ -279,10 +331,14 @@ export class AnalysisPanel {
     }
 
     /**
-     * 画布只在看得见的时候动：宽屏模式把下方卡片藏了、`?debug=0` 把整块关了、
-     * 页面切到后台 —— 这三种情况都不该有人在给手机画曲线。
+     * 画布只在看得见的时候动：收起、宽屏模式把下方卡片藏了、`?debug=0` 把整块关了、
+     * 页面切到后台 —— 这几种情况都不该有人在给手机画曲线。
+     *
+     * 收起这一种必须靠 `open` 判断：details 关着的时候，Chrome 只是不渲染里面的
+     * 东西，盒子其实还照常排版，画布的 clientWidth 和 offsetParent 都是正常的。
      */
     visible() {
+        if (this.root.open === false) return false;
         return Boolean(this.root.offsetParent) && !document.hidden;
     }
 }

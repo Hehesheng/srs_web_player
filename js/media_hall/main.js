@@ -81,8 +81,12 @@ function initialCorrectMode() {
 const HALL_CORRECT_MODE = initialCorrectMode();
 const HALL_RATE_CORRECTION = !isIOSLike();
 
-// 实时分析（小格 + 一分钟曲线 + 原始数据行）。默认就在，`?debug=0` 才关。
+// 实时分析（小格 + 一分钟曲线 + 原始数据行）。默认就在、默认收起在最下面，
+// `?debug=0` 才整块关掉。
 let memberAnalysis = null;
+// 那一行原始数据的纯文本副本：卡片默认是收起的，收起的 details 里 innerText 是
+// 空的，复制按钮不能靠读 DOM。每次统计拍更新，和上面写进去的格子同源。
+let lastHealthText = "";
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
@@ -1704,14 +1708,17 @@ function memberEngineLabel() {
  * 设置（顶栏可选），关掉就是它自己跑的样子。
  */
 function updateMemberHealth(health, stats) {
+    if (!health) return;
     const node = $("member-health");
-    if (!node || !health) return;
     const dropped = health.dropped == null ? "--" : health.dropped;
     const frames = health.frames == null ? "--" : health.frames;
     const short = health.shortStalls == null ? "--" : health.shortStalls;
     const starved = (health.shortStarved || 0) + (health.stallStarved || 0);
-    node.innerHTML = "";
+    const parts = [];
+    if (node) node.innerHTML = "";
     const cell = (label, value) => {
+        parts.push(`${label} ${value}`);
+        if (!node) return;
         const span = document.createElement("span");
         span.append(`${label} `);
         const strong = document.createElement("span");
@@ -1749,6 +1756,30 @@ function updateMemberHealth(health, stats) {
         ].filter(Boolean).join("/");
         cell("倍速", `${stats.rate.toFixed(2)}x${notes ? `(${notes})` : ""}`);
     }
+    lastHealthText = parts.join(" ");
+}
+
+/**
+ * 收起时 summary 上那一行：折叠着也得能扫一眼看出有没有事。
+ *
+ * 只放四件事 —— 前向缓存（还有多少缓冲）、卡顿、失速、跳转。任何一件真的出问题
+ * 就把这一行染成琥珀色；都正常就保持灰色，不吵人。详细的十一格和曲线展开再看。
+ */
+function memberAnalysisBrief(health) {
+    const starved = (health.shortStarved || 0) + (health.stallStarved || 0);
+    const trouble = [
+        health.buffer < 2,
+        health.stalls > 0,
+        health.shortStalls > 0,
+        health.advance != null && health.advance < 0.98,
+    ].some(Boolean);
+    const text = [
+        `前向缓存 ${health.buffer.toFixed(1)}s`,
+        `卡顿 ${health.stalls}次`,
+        `失速 ${health.shortStalls == null ? "--" : health.shortStalls}次${starved ? `(缺数据${starved})` : ""}`,
+        `跳转 ${health.seeks}次(纠偏${health.correctionSeeks})`,
+    ].join(" · ");
+    return { text, tone: trouble ? "warn" : "muted" };
 }
 
 /**
@@ -1837,6 +1868,7 @@ function updateMemberAnalysis(health, stats) {
     if (!memberAnalysis || !health) return;
     memberAnalysis.update({
         tiles: memberAnalysisTiles(health, stats),
+        brief: memberAnalysisBrief(health),
         samples: {
             drift: stats ? stats.drift : null,
             buffer: health.buffer,
@@ -1848,8 +1880,7 @@ function updateMemberAnalysis(health, stats) {
 
 /** 复制实时分析那一行原始数据 —— 报卡顿的时候要的就是这一行。 */
 async function copyMemberHealth() {
-    const node = $("member-health");
-    const text = node ? node.innerText.replace(/\s+/g, " ").trim() : "";
+    const text = lastHealthText.trim();
     if (!text) {
         toast("还没有数据", "info");
         return;
@@ -2860,9 +2891,9 @@ function wire() {
 }
 
 /**
- * 实时分析块默认就在（小格、一分钟曲线、原始数据行都是）。
+ * 实时分析块默认就在（最下面、默认折叠，summary 那一行也带读数）。
  *
- * `?debug=0` 是唯一关掉它的开关：整块收起，`__hallDebug()` 也不装 —— 曲线画在
+ * `?debug=0` 是唯一关掉它的开关：整块藏掉，`__hallDebug()` 也不装 —— 曲线画在
  * 手机上是有成本的，而「先看看不做任何事时它自己什么样」这个读法仍然要留得住。
  * 显式写了 `?debug`（不带 0）和默认是同一件事，老链接不会因此变化。
  */
