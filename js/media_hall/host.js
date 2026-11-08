@@ -47,6 +47,15 @@ export class HostController {
         // A position we asked a stream to open at and it has not reached yet.
         this.pendingStart = null;
         this.pendingStartUntil = 0;
+        // Whether the room is meant to be playing.  Swapping the source pauses
+        // the element, and a restart is only a seek -- reading `video.paused`
+        // after one would say the host had stopped and leave the room waiting
+        // for a click that is not coming.
+        this.playIntent = false;
+        // Set around a pause we cause ourselves, so the pause event it fires
+        // is not read as the host pressing stop.
+        this.swapPause = false;
+        this.resumeTried = false;
     }
 
     /** The element's clock is stream-relative; callers want item time. */
@@ -115,15 +124,20 @@ export class HostController {
             this.ready = true;
             this.onLoaded();
             this.sendState(false);
+            this.resumeIfWanted();
         });
         listen("canplay", () => {
             if (this.waiting) {
                 this.waiting = false;
                 this.sendState(false);
             }
+            this.resumeIfWanted();
         });
         listen("play", () => {
             this.waiting = false;
+            // Playback started, however it was started: from here on a restart
+            // means "carry on", not "the host stopped".
+            this.playIntent = true;
             if (this.mediaEnded) {
                 this.mediaEnded = false;
                 this.seq = (this.seq + 1) >>> 0;
@@ -132,7 +146,11 @@ export class HostController {
             }
             this.sendState(false);
         });
-        listen("pause", () => this.sendState(false));
+        listen("pause", () => {
+            if (this.swapPause) this.swapPause = false;
+            else this.playIntent = false;
+            this.sendState(false);
+        });
         listen("waiting", () => {
             this.waiting = true;
             this.sendState(false);
@@ -153,13 +171,24 @@ export class HostController {
         listen("ended", () => {
             this.mediaEnded = true;
             this.waiting = false;
+            this.playIntent = false;
             this.sendRaw({ type: "end" });
             this.onEnded();
         });
         listen("error", () => {
-            const code = video.error ? video.error.code : 0;
-            const detail = video.error && video.error.message ? video.error.message : "";
-            this.onError("视频加载失败", { kind: "media", code, detail });
+            const media = video.error;
+            if (!media) return;
+            // Swapping the source aborts whatever the old stream was still
+            // fetching, and the element reports that as MEDIA_ERR_ABORTED even
+            // though the new stream is fine.  A transcode's real failures come
+            // through hls.js instead -- passing this on told the host to pick
+            // the video again every time they dragged the progress bar.
+            if (media.code === 1) return;
+            this.onError("视频加载失败", {
+                kind: "media",
+                code: media.code,
+                detail: media.message || "",
+            });
         });
 
         this.worker = new Worker(new URL("./hostWorker.js", import.meta.url), { type: "module" });
@@ -278,11 +307,7 @@ export class HostController {
         this.waiting = false;
         this.mediaEnded = false;
         this.seq = (this.seq + 1) >>> 0;
-        try {
-            video.pause();
-        } catch {
-            // ignore
-        }
+        this.pauseForSwap();
         video.src = this.objectUrl;
         video.load();
         if (previousUrl) URL.revokeObjectURL(previousUrl);
@@ -302,11 +327,7 @@ export class HostController {
         this.waiting = false;
         this.mediaEnded = false;
         this.seq = (this.seq + 1) >>> 0;
-        try {
-            video.pause();
-        } catch {
-            // ignore
-        }
+        this.pauseForSwap();
         if (url) video.src = url;
         else video.removeAttribute("src");
         video.load();
@@ -342,11 +363,8 @@ export class HostController {
         this.waiting = true;
         this.mediaEnded = false;
         if (restart) this.seq = (this.seq + 1) >>> 0;
-        try {
-            this.video.pause();
-        } catch {
-            // ignore
-        }
+        this.resumeTried = false;
+        this.pauseForSwap();
         const startAt = wanted - this.timeOffset;
         // Until the new stream's own segments arrive the element reports 0, so
         // hold the room's position in the meantime (see absoluteTime()).
@@ -391,11 +409,8 @@ export class HostController {
         this.ready = false;
         this.waiting = false;
         this.mediaEnded = false;
-        try {
-            video.pause();
-        } catch {
-            // ignore
-        }
+        this.playIntent = false;
+        this.pauseForSwap();
         video.removeAttribute("src");
         try {
             video.load();
@@ -409,16 +424,58 @@ export class HostController {
     play() {
         const video = this.video;
         if (!video.getAttribute("src")) return;
+        this.playIntent = true;
         let promise;
         try {
             promise = video.play();
-        } catch {
-            this.onError("浏览器阻止了自动播放，请手动点击播放");
+        } catch (error) {
+            this.playFailed(error);
             return;
         }
         if (promise && typeof promise.catch === "function") {
-            promise.catch(() => this.onError("浏览器阻止了自动播放，请手动点击播放"));
+            promise.catch((error) => this.playFailed(error));
         }
+    }
+
+    /** Is the room meant to be playing right now? */
+    wantsPlayback() {
+        return this.playIntent && !this.mediaEnded;
+    }
+
+    /**
+     * A swap aborts a `play()` that was still pending, which arrives here as
+     * AbortError.  Only a policy block is worth a message.
+     */
+    playFailed(error) {
+        if (error && error.name === "AbortError") return;
+        this.playIntent = false;
+        this.onError("浏览器阻止了自动播放，请手动点击播放");
+    }
+
+    /** Pause the element without it reading as "the host stopped playing". */
+    pauseForSwap() {
+        const video = this.video;
+        if (video.paused) return;
+        this.swapPause = true;
+        try {
+            video.pause();
+        } catch {
+            this.swapPause = false;
+        }
+    }
+
+    /**
+     * Carry on once a restarted stream has data.
+     *
+     * The `play()` that follows a restart often lands before the new stream
+     * can play, and comes back as an abort; this is the second chance, so a
+     * seek does not leave the host sitting on a still picture.
+     */
+    resumeIfWanted() {
+        if (!this.wantsPlayback() || this.resumeTried) return;
+        if (!this.video.paused) return;
+        this.resumeTried = true;
+        this.play();
     }
 
     handleWorkerMessage(message) {
@@ -481,6 +538,7 @@ export class HostController {
             setTimeout(() => worker.terminate(), 250);
         }
 
+        this.playIntent = false;
         try {
             this.video.pause();
         } catch {

@@ -10,6 +10,10 @@ import { SyncController } from "./sync.js";
 
 const MAX_RECONNECT_ATTEMPTS = 8;
 const AUTH_TIMEOUT_MS = 10000;
+// How long the restarts from one drag may keep arriving before the member
+// opens the stream.  Short enough that the picture follows a single seek
+// immediately, long enough to ride out a burst.
+const RESTART_SETTLE_MS = 500;
 
 const FATAL_CLOSE = new Map([
     [4000, "房间已结束"],
@@ -77,6 +81,10 @@ export class MemberController {
         this.mediaPlayHandler = null;
         this.mediaRetryCount = 0;
         this.mediaRetryTimer = null;
+        // A drag reaches the room as a burst of restarts, each with its own
+        // epoch.  Following them one by one re-opens the engine for streams
+        // that are already gone; this waits for the burst to stop instead.
+        this.restartTimer = null;
     }
 
     start() {
@@ -285,18 +293,43 @@ export class MemberController {
             return;
         }
         if (previousId === media.media_id) {
-            // The host restarted the transcoder: the old stream is gone, so
-            // follow them onto the new one.
-            if (restarted && media.playback_mode === "hls") {
-                this.switchMedia();
-                this.onMediaChanged(media);
-            } else {
-                this.applyHlsTiming();
-            }
+            // The host restarted the transcoder -- a seek, a bitrate change or
+            // a subtitle change.  It is the same item, so this is not a media
+            // change: saying it was told every viewer the host had switched
+            // video whenever the progress bar moved.
+            if (restarted && media.playback_mode === "hls") this.followRestart();
+            else this.applyHlsTiming();
             return;
         }
+        this.cancelRestart();
         this.switchMedia();
         this.onMediaChanged(media);
+    }
+
+    /**
+     * Re-open the stream once the restarts stop arriving.
+     *
+     * Dragging the host's progress bar restarts the transcode several times in
+     * a row; only the last of those streams carries the picture the room ends
+     * up on.  Opening each one in turn spends the whole drag tearing buffers
+     * down, and what a viewer sees is the wait getting longer the more they
+     * drag.
+     */
+    followRestart() {
+        clearTimeout(this.restartTimer);
+        this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (this.ended || this.closedByUser) return;
+            const media = this.session.media;
+            if (!media || media.playback_mode !== "hls") return;
+            this.switchMedia();
+        }, RESTART_SETTLE_MS);
+    }
+
+    cancelRestart() {
+        if (!this.restartTimer) return;
+        clearTimeout(this.restartTimer);
+        this.restartTimer = null;
     }
 
     /** Keep the item-time offset in step with whatever the room reports. */
@@ -333,6 +366,7 @@ export class MemberController {
         this.mediaRetryCount = 0;
         clearTimeout(this.mediaRetryTimer);
         this.mediaRetryTimer = null;
+        this.cancelRestart();
         if (this.sync) this.sync.resetForMedia();
         try {
             video.pause();
@@ -368,6 +402,10 @@ export class MemberController {
                 if (this.engineEvents[what] != null) this.engineEvents[what] += 1;
             },
             onError: () => {
+                // The stream we are on was replaced while we were still
+                // waiting for the room to settle: the next one is coming, so
+                // this is not a failure to report.
+                if (this.restartTimer) return;
                 this.onOverlay("media", "转码流已中断", "重试", () => this.retrySource());
                 this.onError("转码流出错，请点击重试");
             },
@@ -387,6 +425,7 @@ export class MemberController {
         this.mediaRetryCount = 0;
         clearTimeout(this.mediaRetryTimer);
         this.mediaRetryTimer = null;
+        this.cancelRestart();
         if (this.sync) this.sync.resetForMedia();
         try {
             this.video.pause();
@@ -488,6 +527,11 @@ export class MemberController {
         const code = video.error ? video.error.code : 0;
         if (!video.getAttribute("src")) return;
         if (this.ended || this.closedByUser) return;
+        // MEDIA_ERR_ABORTED is what the element says when we replace the source
+        // under it: the fetch we just cancelled, not a broken stream.  A
+        // restart makes this fire for every viewer, and answering it with a
+        // retry prompt is noise.
+        if (code === 1) return;
         // A switch can race the host's generation bump and fail one request;
         // retry quietly a couple of times before telling the user.
         if (this.mediaRetryCount < 2) {
@@ -650,6 +694,7 @@ export class MemberController {
         }
         clearTimeout(this.mediaRetryTimer);
         this.mediaRetryTimer = null;
+        this.cancelRestart();
         if (this.mediaErrorHandler) {
             this.video.removeEventListener("error", this.mediaErrorHandler);
             this.mediaErrorHandler = null;

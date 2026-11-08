@@ -1329,7 +1329,10 @@ function followHostStream() {
         host.setHlsStart(roomMediaStart());
         return;
     }
-    const wasPlaying = host.isHls && !host.video.paused && !host.video.ended;
+    // What the room was doing, not what the element says: switchHls pauses it
+    // on the way in, so reading `paused` here would always answer "stopped"
+    // and leave the whole room waiting for a click that never comes.
+    const wasPlaying = host.wantsPlayback();
     host.switchHls(hostStream.url, {
         start: roomMediaStart(),
         duration: Number(media.duration) || 0,
