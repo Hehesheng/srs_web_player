@@ -184,8 +184,9 @@ export class SyncController {
         this._onSeeking = () => {
             this.resetAdvanceWindow();
             // A scripted/allowed seek must be reverted immediately, even if a
-            // correction just happened.
-            if (!this.allowSeek) this.followNow(true, true);
+            // correction just happened -- but only to a position the room is
+            // really on (see hostPositionCurrent).
+            if (!this.allowSeek && this.hostPositionCurrent()) this.followNow(true, true);
         };
         this._onSeeked = () => {
             this.allowSeek = false;
@@ -310,6 +311,22 @@ export class SyncController {
     shouldPlay() {
         const host = this.host;
         return Boolean(host && host.online !== false && host.playing && !host.buffering);
+    }
+
+    /**
+     * Whether the host's position is a place to move a viewer to.
+     *
+     * A starved host -- and one that is only quiet because its transcode is
+     * being restarted -- still carries a `position`: the room projects the last
+     * one forward.  It is where the *previous* stream was, and seeking to it
+     * parks a viewer on segments the transcode running now never makes, so the
+     * picture sits there until something else moves it.  Position off the host
+     * only while it has a picture.
+     */
+    hostPositionCurrent() {
+        const host = this.host;
+        if (!host || host.online === false) return false;
+        return !host.buffering && !host.stale;
     }
 
     // -- local playback health -----------------------------------------
@@ -572,7 +589,7 @@ export class SyncController {
         const now = performance.now();
         const advance = this.measureAdvance();
 
-        if (this.pendingInitialSeek && this.video.readyState >= 1) {
+        if (this.pendingInitialSeek && this.video.readyState >= 1 && this.hostPositionCurrent()) {
             this.pendingInitialSeek = false;
             this.hardSeek(this.targetPosition(), true, false, "position");
         }

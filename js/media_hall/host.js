@@ -56,6 +56,15 @@ export class HostController {
         // is not read as the host pressing stop.
         this.swapPause = false;
         this.resumeTried = false;
+        // A transcode swap leaves this element with nothing to play for as
+        // long as the encoder takes to cut its first segment -- seconds, after
+        // a seek.  `ready` is false for that whole window, and going quiet for
+        // it is the one thing that must not happen: the room projects a silent
+        // host's last position forward, so every member seeks to where the
+        // *previous* stream was and then waits for segments the new one is not
+        // making.  While this is set we keep reporting the position the room
+        // opened at, with `buffering`.
+        this.swapping = false;
     }
 
     /** The element's clock is stream-relative; callers want item time. */
@@ -122,6 +131,9 @@ export class HostController {
 
         listen("loadedmetadata", () => {
             this.ready = true;
+            // The new stream has something to show, so the room can stop being
+            // told this host is mid-swap.
+            this.swapping = false;
             this.onLoaded();
             this.sendState(false);
             this.resumeIfWanted();
@@ -178,6 +190,10 @@ export class HostController {
         listen("error", () => {
             const media = video.error;
             if (!media) return;
+            // Whatever went wrong, it is not a swap still in flight: leaving
+            // this set would keep telling the room to wait for a stream that
+            // is never coming.
+            this.swapping = false;
             // Swapping the source aborts whatever the old stream was still
             // fetching, and the element reports that as MEDIA_ERR_ABORTED even
             // though the new stream is fine.  A transcode's real failures come
@@ -219,7 +235,9 @@ export class HostController {
 
     heartbeat() {
         const video = this.video;
-        if (!this.ready) return;
+        // A swap is exactly when the room must not be left guessing, and it is
+        // the one window where `ready` is false on purpose.
+        if (!this.ready && !this.swapping) return;
         const playing = !video.paused && !video.ended;
         if (!playing && performance.now() - this.lastSentAt < HEARTBEAT_PAUSED_MS) {
             this.emitProgress();
@@ -259,7 +277,7 @@ export class HostController {
 
     sendState(isSeek) {
         const video = this.video;
-        if (!this.worker || !this.ready) return;
+        if (!this.worker || (!this.ready && !this.swapping)) return;
         // Stream-relative on purpose: members are watching the same transcode,
         // so they compare against their own element clock.  That clock reads 0
         // while a restarted stream is still opening, and publishing that would
@@ -268,7 +286,9 @@ export class HostController {
         // at instead.
         const position = this.absoluteTime();
         const playing = !video.paused && !video.ended;
-        const buffering = this.trackAdvance();
+        // A swap in flight has no picture here, which is what `buffering`
+        // means to the room: hold the position, do not ride it out.
+        const buffering = this.swapping || this.trackAdvance();
         this.lastSentAt = performance.now();
         this.worker.postMessage({
             type: isSeek ? "seek" : "state",
@@ -370,6 +390,7 @@ export class HostController {
         // hold the room's position in the meantime (see absoluteTime()).
         this.pendingStart = startAt > 0.5 ? startAt : null;
         this.pendingStartUntil = performance.now() + 20000;
+        this.swapping = true;
         attachHls(this.video, url, {
             // Stream time of the room's position: the element's clock runs from
             // the stream's first segment, one item-time offset below the item.
@@ -377,6 +398,9 @@ export class HostController {
             onError: () => this.onError("转码流已中断，正在重新连接", { kind: "hls" }),
         });
         this.onProgress(this.progressSnapshot({ paused: true, waiting: true, position: 0 }));
+        // Tell the room now rather than at the next heartbeat: until this
+        // arrives it is still going by the stream this one replaced.
+        this.sendState(false);
     }
 
     /** Drop HLS bookkeeping before playing something else. */
@@ -387,6 +411,7 @@ export class HostController {
         this.mediaDuration = 0;
         this.pendingStart = null;
         this.pendingStartUntil = 0;
+        this.swapping = false;
     }
 
     /** The transcode advanced the stream start (a seek); keep item time right. */
