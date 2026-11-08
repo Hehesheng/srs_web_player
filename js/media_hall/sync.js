@@ -46,15 +46,15 @@ const RATE_CEILING_DEBT = 0.2;
 // did not touch the rate, because a correction in flight hides the loss.
 // Forward buffer this thin at the moment of a hitch means no data to show.
 const STARVED_AHEAD = 0.35;
-// A device that will not go faster than real time.  Asked for clearly more than
-// the host's own rate, it still delivers no more than a second of content per
-// second of wall clock -- and spends the difference on stalls, which is the
-// picture the viewer sees.  The ask has to be a real push (a device losing a
-// tenth of everything still *does* go faster when pushed, so a mild ask that
-// lands on real time is not evidence), and one measurement like that is noise;
-// two in a row is a ceiling.
-const SAT_ASK = 0.15;
-const SAT_DELIVER = 1.05;
+// A device that will not go faster than real time.  Asked for more, it still
+// delivers what it delivered when nothing was asked of it -- and spends the
+// difference on stalls, which is the picture the viewer sees.  The comparison
+// is against the device's own unpushed throughput rather than against 1.00,
+// because a device that loses a tenth of everything still *does* go faster
+// when pushed (a losing device is not a ceiling), while the phone does not.
+const SAT_UNPUSHED = 0.03;
+const SAT_PUSHED = 0.08;
+const SAT_GAIN = 0.03;
 // ... unless the freeze took most of the window, which points at the fetch
 // rather than at the device.
 const SAT_FROZEN_SHARE = 0.3;
@@ -158,6 +158,7 @@ export class SyncController {
         // re-opened stream does not make it a different phone.
         this.rateSaturated = false;
         this.satWindows = 0;
+        this.unpushedRatio = null;
         // Times this controller stopped and started the picture, split by why:
         // the host paused, or the host hiccuped and we followed it.
         this.hostPauseCount = 0;
@@ -428,36 +429,46 @@ export class SyncController {
     }
 
     /**
-     * Did asking for more than real time buy anything?
+     * Did asking for more buy anything?
      *
-     * Measured over the window that just closed: if we asked for a rate above
-     * the host's own and the element still delivered about one second of
-     * content per second of wall clock, it has no headroom to give -- and the
-     * correction keeps asking, which is what turns a device near its limit
-     * into a device that stutters.  Two such windows stop the asking for the
-     * rest of the session; the downward half of the correction stays, because
-     * being ahead is still worth slowing down.
+     * Measured over the window that just closed, against the device's own
+     * unpushed throughput: if we asked for a rate well above the host's own and
+     * the element delivered no more than it delivers when nothing is asked of
+     * it, the ask bought stalls and nothing else -- and the correction keeps
+     * asking, which is what turns a phone near its limit into a phone that
+     * stutters.  Two such windows stop the asking for the rest of the session;
+     * the downward half of the correction stays, because being ahead is still
+     * worth slowing down.
      */
     probeRateCeiling(span) {
         if (this.rateSaturated) return;
+        const frozen = (this.stallTotalMs - this.advanceStallMs) / span;
+        if (frozen >= SAT_FROZEN_SHARE) return;
         const base = Number(this.host && this.host.rate) || 1;
         const held = Number(this.video.playbackRate) || 1;
-        if (this.advanceRate < base + SAT_ASK || held < base + SAT_ASK) {
-            // Not a window we can judge: nothing was being asked of it.
+        // Only a window that was asked for the same rate throughout can be
+        // judged: one that ramped from the host's own rate up to the ceiling
+        // says neither what the device does unpushed nor what it does pushed.
+        if (Math.abs(this.advanceRate - held) > 0.02) return;
+        const asked = Math.min(this.advanceRate, held);
+        if (asked <= base + SAT_UNPUSHED) {
+            // What this device does when nothing is asked of it: the yardstick
+            // every pushed window is compared against.  A window this close to
+            // the host's own rate is not distorted by our own nudges.
+            this.unpushedRatio = this.advanceRatio;
             return;
         }
-        const frozen = (this.stallTotalMs - this.advanceStallMs) / span;
-        if (this.advanceRatio > SAT_DELIVER) {
+        if (asked < base + SAT_PUSHED || this.unpushedRatio === null) return;
+        if (this.advanceRatio > this.unpushedRatio + SAT_GAIN) {
             // It did go faster, so there is headroom after all.
             this.satWindows = 0;
             return;
         }
-        if (frozen >= SAT_FROZEN_SHARE) return;
         this.satWindows += 1;
         if (this.satWindows < SAT_WINDOWS) return;
         this.rateSaturated = true;
         this.satWindows = 0;
-        console.info("[hall] 这台设备跑不到实时以上的倍速，之后只往下纠偏");
+        console.info("[hall] 这台设备上抬倍速换不来速度，之后只往下纠偏");
     }
 
     /** A clock jump is not elapsed time; start the window over. */
@@ -684,12 +695,23 @@ export class SyncController {
         const magnitude = Math.abs(drift);
         if (magnitude > 8) {
             this.hardSeek(target, true);
-        } else if (magnitude > 3) {
+        } else if (magnitude > 3 && drift < 0) {
             if (!this.bigDriftSince) this.bigDriftSince = now;
             if (now - this.bigDriftSince > 1000) {
                 this.hardSeek(target);
                 this.bigDriftSince = 0;
             }
+        } else if (magnitude > 3) {
+            // A lead, not a deficit.  Chasing it costs a seek *backwards*,
+            // which on iOS throws the buffer away and re-fetches behind the
+            // playhead -- several stalls' worth of damage for a difference the
+            // viewer cannot see, since watching ahead of the host is not
+            // visible at all.  The rate above drains it instead (the 8s rule
+            // still resyncs a real desync).
+            this.bigDriftSince = 0;
+            const base = Number(host.rate) || 1;
+            const rate = clamp(base - drift * RATE_SLEW_DEBT, base - RATE_CEILING_DEBT, base);
+            this.applyRate(rate, base, drift, target, magnitude, now);
         } else {
             this.bigDriftSince = 0;
             const base = Number(host.rate) || 1;
