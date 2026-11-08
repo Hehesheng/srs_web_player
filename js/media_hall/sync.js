@@ -5,30 +5,61 @@
  * clock offset with NTP-style pings, then rides a small PLL:
  *
  *   - |drift| < 0.15s  : play at host rate
- *   - 0.15s .. 3s      : gently correct within +/-10% of host rate
+ *   - 0.15s .. 3s      : correct at up to +/-10% of host rate, and up to +/-
+ *                        25% once the drift is over a second -- a debt that
+ *                        big has to be paid back faster than it accumulates
  *   - 3s .. 8s         : hard seek after the drift persists for 1s
  *   - > 8s             : hard seek immediately
  *
  * Members always stay D seconds behind the host, where D grows when the local
  * network stalls and, once 60s have passed without a stall, decays every 30s
  * (by 0.2s while it is still well above DMin, by 0.1s once it is close).
+ *
+ * Being behind is only latency, so the controller is deliberately lazy: it
+ * writes a new rate only when the correction is worth a write (`RATE_DEADBAND`)
+ * and never seeks just to close a small gap.  On a phone every rate write and
+ * every seek costs a pipeline flush, and flushes cost the picture more time
+ * than the drift they remove.
  */
 
 const MIN_SEEK_INTERVAL = 1500;
 const CORRECTION_COOLDOWN = 8000;
 const DRIFT_TOLERANCE = 0.15;
+// The drift estimate moves by hundredths of a second every tick on RTT noise
+// alone.  Chasing that would re-rate the element several times a second, which
+// is audible on some phones and can itself cost the clock time.
+const RATE_DEADBAND = 0.03;
+const RATE_SLEW = 0.06;
+// Past this the drift is no longer noise to ride out but a debt to repay.
+// A device that loses time settles with its drift sitting exactly on this
+// boundary, so entering and leaving the tier are separated: without that the
+// correction chatters between the two ceilings and re-rates the element on
+// every tick.
+const DEBT_SECONDS = 1.0;
+const DEBT_RELEASE = 0.6;
+const RATE_SLEW_DEBT = 0.18;
+const RATE_CEILING = 0.1;
+const RATE_CEILING_DEBT = 0.25;
 const D_DECAY_INTERVAL = 30000;
 const D_DECAY_STALL_GUARD = 60000;
 // How long the position may stand still before the picture counts as starved.
 // `waiting`/`stalled` alone are not enough: iOS/Safari fires `stalled` on a
 // live HLS stream while playback continues, and no `playing` follows it.
 const STALL_CONFIRM_MS = 700;
+// Short hitches: too brief to light the buffering overlay, but they cost the
+// clock exactly what they cost the picture, so they are counted separately.
+// Without this a phone that hitches 400ms every few seconds reads as clean.
+const MICRO_FREEZE_MS = 120;
+// Long enough that one hitch does not dominate the measured advance ratio.
+const ADVANCE_WINDOW_MS = 10000;
 // A starved element still gets the occasional seek, because that is what
 // re-primes the fetch; rate changes do nothing while the clock is stopped.
 const STALL_RECOVER_MS = 5000;
-// When the engine refuses playbackRate (iOS on some live streams) the only
-// remaining lever is a small in-buffer seek, at this minimum spacing.
+// When the engine refuses playbackRate the only remaining lever is a seek, at
+// this minimum spacing -- and only for an element that has run *ahead*, which
+// is the one error a seek can fix when no rate is available.
 const RATE_LOCKED_SEEK_MS = 6000;
+const RATE_LOCKED_AHEAD = 1.0;
 // After this many refused rate changes we stop asking and switch to seeks.
 const RATE_REFUSE_LIMIT = 3;
 
@@ -76,8 +107,25 @@ export class SyncController {
         // a matter of opinion.
         this.stallCount = 0;
         this.stallTotalMs = 0;
+        this.microSince = 0;
+        this.microCount = 0;
+        this.microTotalMs = 0;
+        // Content time consumed per second of wall clock.  Below 1 the element
+        // is losing time -- an engine problem no rate can win against, as
+        // opposed to a correction that is merely too slow.
+        this.advanceRatio = 1;
+        this.advanceAt = 0;
+        this.advanceClock = 0;
+        // Times this controller stopped and started the picture, split by why:
+        // the host paused, or the host hiccuped and we followed it.
+        this.hostPauseCount = 0;
+        this.hostStallCount = 0;
+        this.playCount = 0;
         this.seekCount = 0;
+        this.correctionSeeks = 0;
+        this.positionSeeks = 0;
         this.bigDriftSince = 0;
+        this.inDebt = false;
         this.pendingInitialSeek = true;
         this.allowSeek = false;
         this.allowSeekTimer = 0;
@@ -98,6 +146,7 @@ export class SyncController {
             this.lastStallAt = performance.now();
         };
         this._onSeeking = () => {
+            this.resetAdvanceWindow();
             // A scripted/allowed seek must be reverted immediately, even if a
             // correction just happened.
             if (!this.allowSeek) this.followNow(true, true);
@@ -263,8 +312,54 @@ export class SyncController {
                 this.stallTotalMs += duration;
             }
         }
+        // The same measurement with a much lower threshold, so a phone that
+        // hitches for a few hundred milliseconds -- and never lights the
+        // overlay -- still shows up in the report.
+        const short = playing && frozenFor > MICRO_FREEZE_MS;
+        if (short) {
+            if (!this.microSince) this.microSince = now - frozenFor;
+        } else if (this.microSince) {
+            const duration = now - this.microSince;
+            this.microSince = 0;
+            // Longer than STALL_CONFIRM_MS belongs to the stall count above.
+            if (duration > MICRO_FREEZE_MS && duration <= STALL_CONFIRM_MS) {
+                this.microCount += 1;
+                this.microTotalMs += duration;
+            }
+        }
+        this.measureAdvanceRatio(playing, position, now);
         this.setStallOverlay(stalled);
         return { stalled, frozenFor, playing };
+    }
+
+    /**
+     * How much content time the element really consumed per second of clock.
+     *
+     * 1.00 is an engine keeping up; 0.9 is one losing a tenth of every second
+     * to hitches, which no amount of rate correction can recover.  Segments
+     * that advance the clock by other means (a seek) restart the window.
+     */
+    measureAdvanceRatio(playing, position, now) {
+        if (!playing) {
+            this.advanceAt = 0;
+            return;
+        }
+        if (!this.advanceAt) {
+            this.advanceAt = now;
+            this.advanceClock = position;
+            return;
+        }
+        const span = now - this.advanceAt;
+        if (span < ADVANCE_WINDOW_MS) return;
+        const gained = position - this.advanceClock;
+        if (gained >= 0) this.advanceRatio = gained / (span / 1000);
+        this.advanceAt = now;
+        this.advanceClock = position;
+    }
+
+    /** A clock jump is not elapsed time; start the window over. */
+    resetAdvanceWindow() {
+        this.advanceAt = 0;
     }
 
     /** Own the overlay only while starved, and only when it changes state. */
@@ -278,7 +373,7 @@ export class SyncController {
     followNow(force = false, urgent = false) {
         const target = this.targetPosition();
         if (target == null) return;
-        this.hardSeek(target, force, urgent);
+        this.hardSeek(target, force, urgent, "position");
     }
 
     correctNow() {
@@ -294,6 +389,7 @@ export class SyncController {
         this.host = null;
         this.pendingInitialSeek = true;
         this.bigDriftSince = 0;
+        this.inDebt = false;
         this.emaDrift = 0;
         this.allowSeek = false;
         this.lastHardSeek = -1e9;
@@ -305,7 +401,17 @@ export class SyncController {
         this.stallSince = 0;
         this.stallCount = 0;
         this.stallTotalMs = 0;
+        this.microSince = 0;
+        this.microCount = 0;
+        this.microTotalMs = 0;
+        this.advanceRatio = 1;
+        this.advanceAt = 0;
+        this.hostPauseCount = 0;
+        this.hostStallCount = 0;
+        this.playCount = 0;
         this.seekCount = 0;
+        this.correctionSeeks = 0;
+        this.positionSeeks = 0;
         this.rateLocked = false;
         this.rateRefused = 0;
         this.pendingRate = null;
@@ -315,7 +421,7 @@ export class SyncController {
         this.report();
     }
 
-    hardSeek(target, force = false, urgent = false) {
+    hardSeek(target, force = false, urgent = false, kind = "correct") {
         const now = performance.now();
         if (!urgent) {
             if (now - this.lastAnySeek < MIN_SEEK_INTERVAL) return;
@@ -324,6 +430,9 @@ export class SyncController {
 
         this.lastAnySeek = now;
         this.seekCount += 1;
+        if (kind === "position") this.positionSeeks += 1;
+        else this.correctionSeeks += 1;
+        this.resetAdvanceWindow();
         // Forced seeks (initial positioning, resync) are not corrections and
         // must not block the 3s rule that follows a slow start.
         if (!force) {
@@ -370,13 +479,22 @@ export class SyncController {
 
         if (this.pendingInitialSeek && this.video.readyState >= 1) {
             this.pendingInitialSeek = false;
-            this.hardSeek(this.targetPosition(), true);
+            this.hardSeek(this.targetPosition(), true, false, "position");
         }
 
         const shouldPlay = this.shouldPlay();
         if (shouldPlay) {
-            if (this.video.paused && this.video.readyState >= 1) this.playSafe();
+            if (this.video.paused && this.video.readyState >= 1) {
+                this.playCount += 1;
+                this.playSafe();
+            }
         } else if (!this.video.paused) {
+            // Everyone follows the host, so a host hiccup stops the picture
+            // here too -- but it is worth counting: on a phone the restart is
+            // what a viewer sees as a stutter, and it never shows up in the
+            // stall figures because a pause is not supposed to look like one.
+            if (host.online === false || !host.playing) this.hostPauseCount += 1;
+            else this.hostStallCount += 1;
             this.video.pause();
         }
 
@@ -428,12 +546,20 @@ export class SyncController {
         } else {
             this.bigDriftSince = 0;
             const base = Number(host.rate) || 1;
+            // A second of drift is more than noise: it is time the element
+            // owes, and it has to be repaid faster than the hitches that
+            // caused it keep arriving.
+            if (magnitude > DEBT_SECONDS) this.inDebt = true;
+            else if (magnitude < DEBT_RELEASE) this.inDebt = false;
+            const owed = this.inDebt;
+            const slew = owed ? RATE_SLEW_DEBT : RATE_SLEW;
+            const ceiling = owed ? RATE_CEILING_DEBT : RATE_CEILING;
             let rate = base;
             if (magnitude > DRIFT_TOLERANCE) {
-                rate = clamp(base - drift * 0.06, base - 0.1, base + 0.1);
+                rate = clamp(base - drift * slew, base - ceiling, base + ceiling);
             }
             rate = clamp(rate, 0.25, 4);
-            this.applyRate(rate, drift, target, magnitude, now);
+            this.applyRate(rate, base, drift, target, magnitude, now);
         }
         this.report();
     }
@@ -447,9 +573,13 @@ export class SyncController {
      * member sees as "漂移一直大于 D".  So: ask once, verify the element took
      * it, and after a few refusals correct with small in-buffer seeks instead.
      */
-    applyRate(rate, drift, target, magnitude, now) {
+    applyRate(rate, base, drift, target, magnitude, now) {
         if (this.rateLocked) {
-            if (magnitude > Math.max(0.5, this.D) && now - this.lastAnySeek > RATE_LOCKED_SEEK_MS) {
+            // With no rate to lean on, a seek is the only correction left --
+            // and it is only worth its flush for an element that has run
+            // *ahead*, because nothing else can pull it back.  Behind is just
+            // latency; if it grows, the drift rule above seeks anyway.
+            if (drift > Math.max(RATE_LOCKED_AHEAD, this.D) && now - this.lastAnySeek > RATE_LOCKED_SEEK_MS) {
                 this.hardSeek(target, true);
             }
             return;
@@ -475,6 +605,12 @@ export class SyncController {
                 return;
             }
         }
+        // Hold the rate that is already in effect until the correction is
+        // worth another write.  Releasing back to the host's own rate is the
+        // one exception: leaving a stale correction in place is worse than any
+        // flush.
+        const releasing = Math.abs(rate - base) <= 0.005;
+        if (!releasing && Math.abs(rate - current) < RATE_DEADBAND) return;
         this.video.playbackRate = rate;
         this.pendingRate = rate;
     }
@@ -551,7 +687,20 @@ export class SyncController {
             frames: quality ? quality.totalVideoFrames : null,
             stalls: this.stallCount,
             stallMs: Math.round(this.stallTotalMs),
+            // Hitches too short to be counted as stalls above.
+            shortStalls: this.microCount,
+            shortStallMs: Math.round(this.microTotalMs),
             seeks: this.seekCount,
+            correctionSeeks: this.correctionSeeks,
+            positionSeeks: this.positionSeeks,
+            // Content time per second of wall clock; below 1 the engine is
+            // losing time rather than merely being corrected slowly.
+            advance: this.advanceRatio,
+            // Times we stopped and started the picture following the host; on
+            // a phone each restart costs a re-prime the host never notices.
+            hostPauses: this.hostPauseCount,
+            hostStalls: this.hostStallCount,
+            resumes: this.playCount,
         };
     }
 

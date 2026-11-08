@@ -1640,14 +1640,20 @@ function memberEngineLabel() {
  *
  * Written on every stats tick but only visible with `?debug`; it exists so a
  * stutter reported from one device comes back as numbers — which engine is
- * playing, how much is buffered ahead, how many frames were dropped and how
- * many freezes we actually measured.
+ * playing, how much is buffered ahead, how many frames were dropped, how many
+ * freezes we measured and how fast the clock is really running.
+ *
+ * The last few cells are what separate the causes of a stutter that only one
+ * device shows: 推进 below 1.00 means the engine loses time (a rate correction
+ * cannot win), 跳转 rising means the corrections are the hitch, 启停 rising
+ * means the picture is being stopped and restarted under the viewer.
  */
-function updateMemberHealth(health) {
+function updateMemberHealth(health, stats) {
     const node = $("member-health");
     if (!node || !health) return;
     const dropped = health.dropped == null ? "--" : health.dropped;
     const frames = health.frames == null ? "--" : health.frames;
+    const short = health.shortStalls == null ? "--" : health.shortStalls;
     node.innerHTML = "";
     const cell = (label, value) => {
         const span = document.createElement("span");
@@ -1662,7 +1668,13 @@ function updateMemberHealth(health) {
     cell("前向缓存", `${health.buffer.toFixed(1)}s`);
     cell("掉帧", `${dropped}/${frames}`);
     cell("卡顿", `${health.stalls}次/${(health.stallMs / 1000).toFixed(1)}s`);
-    cell("跳转", `${health.seeks}次`);
+    cell("失速", `${short}次/${(health.shortStallMs / 1000).toFixed(1)}s`);
+    cell("跳转", `${health.seeks}次(纠偏${health.correctionSeeks}/定位${health.positionSeeks})`);
+    cell("推进", `${(health.advance == null ? 1 : health.advance).toFixed(2)}x`);
+    cell("启停", `${(health.hostPauses || 0) + (health.hostStalls || 0)}停/${health.resumes || 0}起`);
+    if (stats) {
+        cell("倍速", `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`);
+    }
 }
 
 function storedSubtitleSize() {
@@ -2118,7 +2130,7 @@ function startMember(session, room) {
             // "(固定)" means this device refuses rate changes and is being kept
             // in sync with small seeks instead — worth seeing on a phone.
             $("member-rate").textContent = `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`;
-            updateMemberHealth(stats.health);
+            updateMemberHealth(stats.health, stats);
         },
         onEnded: () => {
             setStatusBadge("member-host-badge", "已结束", "muted");
