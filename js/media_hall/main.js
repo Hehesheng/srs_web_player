@@ -1233,7 +1233,7 @@ function applyHostVideoSubtitle() {
 
 // Transcode quality.  The room carries the value; this ladder is only the
 // menu, cut down to whatever ceiling the server was configured to pull.
-const QUALITY_LADDER = [2_000_000, 3_000_000, 4_000_000, 6_000_000, 8_000_000, 12_000_000, 20_000_000];
+const QUALITY_LADDER = [2_000_000, 3_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000, 12_000_000, 20_000_000];
 let hostQualityMenuSignature = "";
 
 function mbps(value) {
