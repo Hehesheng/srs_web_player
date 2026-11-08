@@ -1663,9 +1663,8 @@ function memberEngineLabel() {
  * means the picture is being stopped and restarted under the viewer.  失速
  * carries its own split -- 缺N counts the hitches that happened with nothing
  * buffered at the playhead, so the rest are the device stalling with data in
- * hand, which no amount of fetching will fix.  倍速 后面的 写N 是改写次数
- * （每次都可能是一下停顿），跑满 表示这台设备量下来跑不到实时以上的倍
- * 速、之后不再上抬。
+ * hand, which no amount of fetching will fix.  倍速 后面的 写N 是改写次数，
+ * 除了房主自己换倍速，现在应该一直不动——纠偏只用跳转，不再动倍速。
  */
 function updateMemberHealth(health, stats) {
     const node = $("member-health");
@@ -1707,7 +1706,6 @@ function updateMemberHealth(health, stats) {
     }
     if (stats) {
         const notes = [
-            health.rateSaturated ? "跑满" : "",
             stats.rateLocked ? "固定" : "",
             health.correction === false ? "纠偏关" : "",
             health.rateWrites ? `写${health.rateWrites}` : "",

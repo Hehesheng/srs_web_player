@@ -2,63 +2,44 @@
  * Member clock + drift controller.
  *
  * The host publishes a server-timestamped timeline.  Every member estimates its
- * clock offset with NTP-style pings, then rides a small PLL:
+ * clock offset with NTP-style pings and then does exactly two things:
  *
- *   - |drift| < 0.15s  : play at host rate
- *   - 0.15s .. 3s      : correct at up to +/-10% of host rate, and up to +/-
- *                        25% once the drift is over a second -- a debt that
- *                        big has to be paid back faster than it accumulates
- *   - 3s .. 8s         : hard seek after the drift persists for 1s
- *   - > 8s             : hard seek immediately
+ *   - play at the host's own rate, always
+ *   - jump to the target once when the drift passes `SEEK_AT` (immediately past
+ *     `SEEK_AT_NOW`), and otherwise leave the picture completely alone
+ *
+ * Nothing in between.  The rate is *not* used to steer the drift: on the phones
+ * that stutter away from the host, every write to `playbackRate` can cost the
+ * picture a flush, and an engine that cannot exceed real time pays for the ask
+ * in stalls -- the correction then costs the viewer more than the drift it
+ * removes.  A viewer notices one jump; nobody notices a second of lag.  So the
+ * drift is left to sit wherever it settles, which on the phones that reported
+ * stutter is around half a second, and one seek clears it once it stops being
+ * mere latency.  Intermittent small hitches are much worse than one big one.
  *
  * Members always stay D seconds behind the host, where D grows when the local
  * network stalls and, once 60s have passed without a stall, decays every 30s
- * (by 0.2s while it is still well above DMin, by 0.1s once it is close).
- *
- * Being behind is only latency, so the controller is deliberately lazy: it
- * writes a new rate only when the correction is worth a write (`RATE_DEADBAND`)
- * and never seeks just to close a small gap.  On a phone every rate write and
- * every seek costs a pipeline flush, and flushes cost the picture more time
- * than the drift they remove.
+ * (by 0.2s while it is still well above DMin, by 0.1s once it is close).  A
+ * change to D moves the target rather than the element, so it is free.
  */
 
 const MIN_SEEK_INTERVAL = 1500;
 const CORRECTION_COOLDOWN = 8000;
-const DRIFT_TOLERANCE = 0.15;
-// The drift estimate moves by hundredths of a second every tick on RTT noise
-// alone.  Chasing that would re-rate the element several times a second, which
-// is audible on some phones and can itself cost the clock time.
-const RATE_DEADBAND = 0.03;
-const RATE_SLEW = 0.06;
-// Past this the drift is no longer noise to ride out but a debt to repay.
-// A device that loses time settles with its drift sitting exactly on this
-// boundary, so entering and leaving the tier are separated: without that the
-// correction chatters between the two ceilings and re-rates the element on
-// every tick.
-const DEBT_SECONDS = 1.0;
-const DEBT_RELEASE = 0.6;
-const RATE_SLEW_DEBT = 0.18;
-const RATE_CEILING = 0.1;
-const RATE_CEILING_DEBT = 0.2;
+// Where the drift stops being latency and gets one seek.  The phones that
+// reported stutter settle within about a second of the target on their own, so
+// this leaves them alone; a device that genuinely loses time still cannot walk
+// away with it.  Lowering it trades smoothness for a smaller lag -- one number,
+// nothing else in the controller depends on it.
+const SEEK_AT = 3.0;
+// Past this the element is showing something else entirely and the seek goes
+// out without waiting to see whether the drift persists.
+const SEEK_AT_NOW = 8.0;
 // What the element delivers per second of wall clock, divided by what it was
 // asked for.  1.0 is an engine that plays what it is told; 0.88 is one losing
-// an eighth of everything it decodes.  Measured only from windows in which we
-// did not touch the rate, because a correction in flight hides the loss.
+// an eighth of everything it decodes, which no rate can win back.  Measured
+// only from windows in which we did not touch the rate.
 // Forward buffer this thin at the moment of a hitch means no data to show.
 const STARVED_AHEAD = 0.35;
-// A device that will not go faster than real time.  Asked for more, it still
-// delivers what it delivered when nothing was asked of it -- and spends the
-// difference on stalls, which is the picture the viewer sees.  The comparison
-// is against the device's own unpushed throughput rather than against 1.00,
-// because a device that loses a tenth of everything still *does* go faster
-// when pushed (a losing device is not a ceiling), while the phone does not.
-const SAT_UNPUSHED = 0.03;
-const SAT_PUSHED = 0.08;
-const SAT_GAIN = 0.03;
-// ... unless the freeze took most of the window, which points at the fetch
-// rather than at the device.
-const SAT_FROZEN_SHARE = 0.3;
-const SAT_WINDOWS = 2;
 const D_DECAY_INTERVAL = 30000;
 const D_DECAY_STALL_GUARD = 60000;
 // How long the position may stand still before the picture counts as starved.
@@ -74,11 +55,14 @@ const ADVANCE_WINDOW_MS = 10000;
 // A starved element still gets the occasional seek, because that is what
 // re-primes the fetch; rate changes do nothing while the clock is stopped.
 const STALL_RECOVER_MS = 5000;
-// When the engine refuses playbackRate the only remaining lever is a seek, at
-// this minimum spacing -- and only for an element that has run *ahead*, which
-// is the one error a seek can fix when no rate is available.
+// When the engine refuses the host's rate outright (some iOS streams do), the
+// only lever left is a seek, at this minimum spacing.  A lead is worth one --
+// nothing else can pull such an element back -- and so is a deficit that has
+// grown past what any viewer would call latency.  A *small* deficit is not:
+// seeking into it re-creates it, one buffer flush at a time, so it stands.
 const RATE_LOCKED_SEEK_MS = 6000;
 const RATE_LOCKED_AHEAD = 1.0;
+const RATE_LOCKED_LAG = 10.0;
 // After this many refused rate changes we stop asking and switch to seeks.
 const RATE_REFUSE_LIMIT = 3;
 
@@ -96,10 +80,11 @@ export class SyncController {
         this.onStats = onStats || (() => {});
         this.onOverlay = onOverlay || (() => {});
         this.onPlayBlocked = onPlayBlocked || (() => {});
-        // Debug switch (`?fix=0`): leave the picture alone -- no rate, no
-        // correction seeks -- so one reading can say whether the corrections
-        // are the stutter, or the phone is.  Following the host's play/pause
-        // and landing on the room's position at the start still happen.
+        // Debug switch (`?fix=0`): leave the picture alone -- no correction
+        // seeks, no drift steering -- so one reading can say whether the
+        // corrections are the stutter, or the phone is.  Following the host's
+        // rate and play/pause and landing on the room's position at the start
+        // still happen.
         this.correction = correction !== false;
 
         this.host = null;
@@ -150,15 +135,9 @@ export class SyncController {
         // polluted by our own correction can be thrown away.
         this.advanceRate = 1;
         this.advanceWrites = 0;
-        this.advanceStallMs = 0;
         this.rateWrites = 0;
         this.efficiency = 1;
         this.efficiencyValid = false;
-        // Not cleared with the media: this is a fact about the phone, and a
-        // re-opened stream does not make it a different phone.
-        this.rateSaturated = false;
-        this.satWindows = 0;
-        this.unpushedRatio = null;
         // Times this controller stopped and started the picture, split by why:
         // the host paused, or the host hiccuped and we followed it.
         this.hostPauseCount = 0;
@@ -168,7 +147,6 @@ export class SyncController {
         this.correctionSeeks = 0;
         this.positionSeeks = 0;
         this.bigDriftSince = 0;
-        this.inDebt = false;
         this.pendingInitialSeek = true;
         this.allowSeek = false;
         this.allowSeekTimer = 0;
@@ -401,7 +379,6 @@ export class SyncController {
             this.advanceClock = position;
             this.advanceRate = Number(this.video.playbackRate) || 1;
             this.advanceWrites = this.rateWrites;
-            this.advanceStallMs = this.stallTotalMs;
             return;
         }
         const span = now - this.advanceAt;
@@ -419,56 +396,11 @@ export class SyncController {
                     : seen;
                 this.efficiencyValid = true;
             }
-            this.probeRateCeiling(span);
         }
         this.advanceAt = now;
         this.advanceClock = position;
         this.advanceRate = Number(this.video.playbackRate) || 1;
         this.advanceWrites = this.rateWrites;
-        this.advanceStallMs = this.stallTotalMs;
-    }
-
-    /**
-     * Did asking for more buy anything?
-     *
-     * Measured over the window that just closed, against the device's own
-     * unpushed throughput: if we asked for a rate well above the host's own and
-     * the element delivered no more than it delivers when nothing is asked of
-     * it, the ask bought stalls and nothing else -- and the correction keeps
-     * asking, which is what turns a phone near its limit into a phone that
-     * stutters.  Two such windows stop the asking for the rest of the session;
-     * the downward half of the correction stays, because being ahead is still
-     * worth slowing down.
-     */
-    probeRateCeiling(span) {
-        if (this.rateSaturated) return;
-        const frozen = (this.stallTotalMs - this.advanceStallMs) / span;
-        if (frozen >= SAT_FROZEN_SHARE) return;
-        const base = Number(this.host && this.host.rate) || 1;
-        const held = Number(this.video.playbackRate) || 1;
-        // Only a window that was asked for the same rate throughout can be
-        // judged: one that ramped from the host's own rate up to the ceiling
-        // says neither what the device does unpushed nor what it does pushed.
-        if (Math.abs(this.advanceRate - held) > 0.02) return;
-        const asked = Math.min(this.advanceRate, held);
-        if (asked <= base + SAT_UNPUSHED) {
-            // What this device does when nothing is asked of it: the yardstick
-            // every pushed window is compared against.  A window this close to
-            // the host's own rate is not distorted by our own nudges.
-            this.unpushedRatio = this.advanceRatio;
-            return;
-        }
-        if (asked < base + SAT_PUSHED || this.unpushedRatio === null) return;
-        if (this.advanceRatio > this.unpushedRatio + SAT_GAIN) {
-            // It did go faster, so there is headroom after all.
-            this.satWindows = 0;
-            return;
-        }
-        this.satWindows += 1;
-        if (this.satWindows < SAT_WINDOWS) return;
-        this.rateSaturated = true;
-        this.satWindows = 0;
-        console.info("[hall] 这台设备上抬倍速换不来速度，之后只往下纠偏");
     }
 
     /** A clock jump is not elapsed time; start the window over. */
@@ -527,7 +459,6 @@ export class SyncController {
         this.host = null;
         this.pendingInitialSeek = true;
         this.bigDriftSince = 0;
-        this.inDebt = false;
         this.emaDrift = 0;
         this.allowSeek = false;
         this.lastHardSeek = -1e9;
@@ -685,81 +616,66 @@ export class SyncController {
             return;
         }
 
-        // `?fix=0`: no rate, no drift seek.  What is left is what the device
-        // does on its own, which is the number the test is after.
+        // `?fix=0`: no correction seek, and nothing driving the drift.  What is
+        // left is what the device does on its own, which is the number the test
+        // is after.  The host's own rate is still followed -- otherwise the
+        // reading would be of a member playing at 1.0x for no reason.
         if (!this.correction) {
+            this.followHostRate(host);
             this.report();
             return;
         }
 
         const magnitude = Math.abs(drift);
-        if (magnitude > 8) {
+        if (this.rateLocked) {
+            this.lockedSeek(drift, target, magnitude, now);
+        } else if (magnitude > SEEK_AT_NOW) {
             this.hardSeek(target, true);
-        } else if (magnitude > 3 && drift < 0) {
+        } else if (magnitude > SEEK_AT) {
             if (!this.bigDriftSince) this.bigDriftSince = now;
             if (now - this.bigDriftSince > 1000) {
                 this.hardSeek(target);
                 this.bigDriftSince = 0;
             }
-        } else if (magnitude > 3) {
-            // A lead, not a deficit.  Chasing it costs a seek *backwards*,
-            // which on iOS throws the buffer away and re-fetches behind the
-            // playhead -- several stalls' worth of damage for a difference the
-            // viewer cannot see, since watching ahead of the host is not
-            // visible at all.  The rate above drains it instead (the 8s rule
-            // still resyncs a real desync).
-            this.bigDriftSince = 0;
-            const base = Number(host.rate) || 1;
-            const rate = clamp(base - drift * RATE_SLEW_DEBT, base - RATE_CEILING_DEBT, base);
-            this.applyRate(rate, base, drift, target, magnitude, now);
         } else {
+            // Everything smaller than SEEK_AT is left exactly as it is.  This
+            // is the whole policy: the drift a phone accumulates on its own is
+            // smaller than this and settles, and every correction we could aim
+            // at it costs the picture a flush that lasts longer than the drift
+            // did.
             this.bigDriftSince = 0;
-            const base = Number(host.rate) || 1;
-            // A second of drift is more than noise: it is time the element
-            // owes, and it has to be repaid faster than the hitches that
-            // caused it keep arriving.
-            if (magnitude > DEBT_SECONDS) this.inDebt = true;
-            else if (magnitude < DEBT_RELEASE) this.inDebt = false;
-            const owed = this.inDebt;
-            const slew = owed ? RATE_SLEW_DEBT : RATE_SLEW;
-            const ceiling = owed ? RATE_CEILING_DEBT : RATE_CEILING;
-            // A device measured to have no headroom above real time keeps the
-            // downward half of the correction and loses the upward half: the
-            // upward half is what it pays for in stalls.  Catching up is then
-            // the drift rule's business (one seek for a real deficit).
-            const up = this.rateSaturated ? 0 : ceiling;
-            let rate = base;
-            if (magnitude > DRIFT_TOLERANCE) {
-                rate = clamp(base - drift * slew, base - ceiling, base + up);
-            }
-            rate = clamp(rate, 0.25, 4);
-            this.applyRate(rate, base, drift, target, magnitude, now);
         }
+        this.followHostRate(host);
         this.report();
     }
 
     /**
-     * Ride the PLL, or fall back to seeks when the engine will not take a rate.
+     * The one correction left for an element that will not take a rate at all.
      *
-     * iOS Safari ignores playbackRate on some live HLS streams.  Without this
-     * check the drift sits in the gentle band (above tolerance, below the 3s
-     * hard-seek rule) forever and never converges -- which is exactly what a
-     * member sees as "漂移一直大于 D".  So: ask once, verify the element took
-     * it, and after a few refusals correct with small in-buffer seeks instead.
+     * iOS Safari ignores playbackRate on some live HLS streams.  A lead is
+     * worth a seek -- nothing else pulls such an element back -- and so is a
+     * deficit far past anything the viewer would call latency.  A small
+     * deficit is not: seeking into it re-creates it, one flush at a time,
+     * which is the churn this whole file exists to avoid.
      */
-    applyRate(rate, base, drift, target, magnitude, now) {
-        if (this.rateLocked) {
-            // With no rate to lean on, a seek is the only correction left --
-            // and it is only worth its flush for an element that has run
-            // *ahead*, because nothing else can pull it back.  Behind is just
-            // latency; if it grows, the drift rule above seeks anyway.
-            if (drift > Math.max(RATE_LOCKED_AHEAD, this.D) && now - this.lastAnySeek > RATE_LOCKED_SEEK_MS) {
-                this.hardSeek(target, true);
-            }
-            return;
-        }
+    lockedSeek(drift, target, magnitude, now) {
+        this.bigDriftSince = 0;
+        const worth = drift > Math.max(RATE_LOCKED_AHEAD, this.D) || magnitude > RATE_LOCKED_LAG;
+        if (worth && now - this.lastAnySeek > RATE_LOCKED_SEEK_MS) this.hardSeek(target, true);
+    }
+
+    /**
+     * Ask for the host's own rate, and for nothing else.
+     *
+     * The rate is not a correction here: it is how the members follow a host
+     * that chose 1.5x.  The only thing there is to notice is an element that
+     * refuses even that, which after a few tries switches to seeks.
+     */
+    followHostRate(host) {
+        if (this.rateLocked) return;
+        const base = clamp(Number(host.rate) || 1, 0.25, 4);
         const current = Number(this.video.playbackRate) || 1;
-        if (Math.abs(current - rate) <= 0.005) {
+        if (Math.abs(current - base) <= 0.005) {
             this.pendingRate = null;
             this.rateRefused = 0;
             return;
@@ -775,19 +691,13 @@ export class SyncController {
                 this.rateLocked = true;
                 this.rateRefused = 0;
                 this.pendingRate = null;
-                console.info("[hall] 播放器不接受倍速调整，改用小幅跳转纠偏");
+                console.info("[hall] 播放器不接受倍速调整，改用跳转纠偏");
                 return;
             }
         }
-        // Hold the rate that is already in effect until the correction is
-        // worth another write.  Releasing back to the host's own rate is the
-        // one exception: leaving a stale correction in place is worse than any
-        // flush.
-        const releasing = Math.abs(rate - base) <= 0.005;
-        if (!releasing && Math.abs(rate - current) < RATE_DEADBAND) return;
         this.rateWrites += 1;
-        this.video.playbackRate = rate;
-        this.pendingRate = rate;
+        this.video.playbackRate = base;
+        this.pendingRate = base;
     }
 
     playSafe() {
@@ -872,11 +782,9 @@ export class SyncController {
             // what it was asked for.  Below 1 the device -- not the network --
             // is where the time goes.
             efficiency: this.efficiencyValid ? this.efficiency : null,
-            // How many times we touched the rate (each one can cost a hitch)
-            // and whether this device was measured to have no headroom above
-            // real time.
+            // How many times we touched the rate.  Should stay at 0 unless the
+            // host itself changed rate: every write can cost a hitch.
             rateWrites: this.rateWrites,
-            rateSaturated: this.rateSaturated,
             seeks: this.seekCount,
             correctionSeeks: this.correctionSeeks,
             positionSeeks: this.positionSeeks,
