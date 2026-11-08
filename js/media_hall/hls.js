@@ -107,7 +107,10 @@ function playNative(video, url, startAt = 0) {
  * Returns the hls.js instance, or null when playback falls back to the
  * element's own HLS support (old Safari, a phone that lost its session).
  */
-export function attachHls(video, url, { onError, startAt = 0 } = {}) {
+export function attachHls(video, url, { onError, onEvent, startAt = 0 } = {}) {
+    const note = (what) => {
+        if (onEvent) onEvent(what);
+    };
     detachHls(video);
     if (!video || !url) return null;
 
@@ -115,6 +118,7 @@ export function attachHls(video, url, { onError, startAt = 0 } = {}) {
 
     if (!hlsSupported() || nativeOnly.has(video)) {
         // No Media Source here, or this element already lost its session once.
+        note("native");
         return playNative(video, url, at);
     }
 
@@ -141,9 +145,14 @@ export function attachHls(video, url, { onError, startAt = 0 } = {}) {
 
     instance.on(Hls.Events.ERROR, (_event, data) => {
         if (!data || !data.fatal) return;
+        // Every one of these paths re-opens the stream, which on a phone costs
+        // the viewer a visible hitch -- so each is reported, because a report
+        // that says "stutters every few seconds" and a report that says "the
+        // engine was rebuilt eight times" have different fixes.
         // A restarted transcode briefly 404s a segment; recovering is cheaper
         // than tearing the whole stream down and rebuilding it.
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            note("network");
             try {
                 instance.startLoad();
                 return;
@@ -157,6 +166,7 @@ export function attachHls(video, url, { onError, startAt = 0 } = {}) {
             // error card the caller would show.
             if (mediaRepaired.has(video)) {
                 if (managedOnly()) {
+                    note("fallback");
                     detachHls(video);
                     // Same room position, different engine: dropping to the
                     // element must not also drop the viewer back to item 0.
@@ -165,6 +175,7 @@ export function attachHls(video, url, { onError, startAt = 0 } = {}) {
             } else {
                 try {
                     mediaRepaired.add(video);
+                    note("repair");
                     instance.recoverMediaError();
                     return;
                 } catch {
@@ -172,10 +183,12 @@ export function attachHls(video, url, { onError, startAt = 0 } = {}) {
                 }
             }
         }
+        note("giveup");
         detachHls(video);
         if (onError) onError(data);
     });
 
+    note("attach");
     instance.loadSource(url);
     instance.attachMedia(video);
     return instance;

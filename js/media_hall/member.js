@@ -22,9 +22,12 @@ const FATAL_CLOSE = new Map([
 ]);
 
 export class MemberController {
-    constructor({ video, session, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid, onMediaChanged }) {
+    constructor({ video, session, correction, onOverlay, onRoomState, onHostState, onMembers, onConnected, onDisconnected, onError, onStats, onEnded, onTokenInvalid, onMediaChanged }) {
         this.video = video;
         this.session = session;
+        // Left unnormalised on purpose: the sync controller is the one place
+        // that decides what "unset" means (`correction !== false`).
+        this.correction = correction;
         this.onOverlay = onOverlay || (() => {});
         this.onRoomState = onRoomState || (() => {});
         this.onHostState = onHostState || (() => {});
@@ -49,6 +52,11 @@ export class MemberController {
         // itemTime()).
         this.pendingStart = null;
         this.pendingStartUntil = 0;
+        // How many times the engine was opened in this session, and why: each
+        // reopen is a fresh buffer and a visible hitch.  A reopen with no
+        // reason attached is one we asked for -- a host seek, a media change --
+        // where the ones that carry one are the engine failing on its own.
+        this.engineEvents = { attach: 0, native: 0, network: 0, repair: 0, fallback: 0, giveup: 0 };
 
         this.ws = null;
         this.sync = null;
@@ -94,8 +102,10 @@ export class MemberController {
 
         this.sync = new SyncController({
             video,
+            correction: this.correction,
             send: (payload) => this.send(payload),
             onStats: (stats) => {
+                stats.engine = this.engineEvents;
                 this.lastStats = stats;
                 this.onStats(stats);
             },
@@ -348,6 +358,9 @@ export class MemberController {
         this.pendingStartUntil = performance.now() + 20000;
         attachHls(this.video, this.session.media_url, {
             startAt,
+            onEvent: (what) => {
+                if (this.engineEvents[what] != null) this.engineEvents[what] += 1;
+            },
             onError: () => {
                 this.onOverlay("media", "转码流已中断", "重试", () => this.retrySource());
                 this.onError("转码流出错，请点击重试");

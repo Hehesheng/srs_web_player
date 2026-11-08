@@ -30,6 +30,20 @@ const SUBTITLE_TRACK_SELECTOR = "track[data-hall-subtitle]";
 const SUBTITLE_SIZE_KEY = "hall_subtitle_size";
 const SUBTITLE_SIZE_CLASSES = ["cue-small", "cue-medium", "cue-large"];
 const WIDE_MODE_KEY = "hall_wide_mode";
+// `?fix=0` stops every local correction on the member page.  Not a setting: a
+// way to get one reading that separates the two candidates for a phone that
+// hitches, because they need opposite fixes.  If the picture is smooth with
+// corrections off, our rate and seeks are the stutter and the answer is a
+// gentler one; if it hitches the same, the phone's own pipeline is and no
+// correction will help.  Read at load, because joining a room rewrites the URL
+// to `?room=CODE` and would take the flag with it.
+const HALL_CORRECTION = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get("fix") !== "0";
+    } catch {
+        return true;
+    }
+})();
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
@@ -1646,7 +1660,10 @@ function memberEngineLabel() {
  * The last few cells are what separate the causes of a stutter that only one
  * device shows: 推进 below 1.00 means the engine loses time (a rate correction
  * cannot win), 跳转 rising means the corrections are the hitch, 启停 rising
- * means the picture is being stopped and restarted under the viewer.
+ * means the picture is being stopped and restarted under the viewer.  失速
+ * carries its own split -- 缺N counts the hitches that happened with nothing
+ * buffered at the playhead, so the rest are the device stalling with data in
+ * hand, which no amount of fetching will fix.
  */
 function updateMemberHealth(health, stats) {
     const node = $("member-health");
@@ -1654,6 +1671,7 @@ function updateMemberHealth(health, stats) {
     const dropped = health.dropped == null ? "--" : health.dropped;
     const frames = health.frames == null ? "--" : health.frames;
     const short = health.shortStalls == null ? "--" : health.shortStalls;
+    const starved = (health.shortStarved || 0) + (health.stallStarved || 0);
     node.innerHTML = "";
     const cell = (label, value) => {
         const span = document.createElement("span");
@@ -1668,12 +1686,29 @@ function updateMemberHealth(health, stats) {
     cell("前向缓存", `${health.buffer.toFixed(1)}s`);
     cell("掉帧", `${dropped}/${frames}`);
     cell("卡顿", `${health.stalls}次/${(health.stallMs / 1000).toFixed(1)}s`);
-    cell("失速", `${short}次/${(health.shortStallMs / 1000).toFixed(1)}s`);
+    cell("失速", `${short}次/${(health.shortStallMs / 1000).toFixed(1)}s${starved ? `(缺数据${starved})` : ""}`);
     cell("跳转", `${health.seeks}次(纠偏${health.correctionSeeks}/定位${health.positionSeeks})`);
     cell("推进", `${(health.advance == null ? 1 : health.advance).toFixed(2)}x`);
+    if (health.efficiency != null) {
+        cell("效率", `${(health.efficiency * 100).toFixed(0)}%`);
+    }
     cell("启停", `${(health.hostPauses || 0) + (health.hostStalls || 0)}停/${health.resumes || 0}起`);
+    const engine = stats && stats.engine;
+    if (engine && engine.attach > 1) {
+        const why = [
+            engine.network ? `网${engine.network}` : "",
+            engine.repair ? `修${engine.repair}` : "",
+            engine.fallback ? `降${engine.fallback}` : "",
+            engine.giveup ? `弃${engine.giveup}` : "",
+        ].filter(Boolean).join("/");
+        cell("重开流", `${engine.attach - 1}次${why ? `(${why})` : ""}`);
+    }
     if (stats) {
-        cell("倍速", `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`);
+        const notes = [
+            stats.rateLocked ? "固定" : "",
+            health.correction === false ? "纠偏关" : "",
+        ].filter(Boolean).join("/");
+        cell("倍速", `${stats.rate.toFixed(2)}x${notes ? `(${notes})` : ""}`);
     }
 }
 
@@ -2070,6 +2105,7 @@ function startMember(session, room) {
     const controller = new MemberController({
         video: $("member-video"),
         session,
+        correction: HALL_CORRECTION,
         onOverlay: (key, text, actionLabel, action) => setMemberOverlay(key, text, actionLabel, action),
         onRoomState: (roomState) => {
             if (roomState && roomState.name) $("member-room-name").textContent = roomState.name;
@@ -2663,6 +2699,7 @@ function installDebugHook() {
             stalled: sync ? Boolean(sync.stallSince) : null,
             frozenFor: sync ? Math.round(performance.now() - sync.lastAdvanceAt) : null,
             rateLocked: sync ? sync.rateLocked : null,
+            correction: sync ? sync.correction : null,
             engine: memberEngineLabel(),
             health: sync ? sync.healthSnapshot() : null,
         };

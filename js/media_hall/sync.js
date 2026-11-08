@@ -39,7 +39,13 @@ const DEBT_SECONDS = 1.0;
 const DEBT_RELEASE = 0.6;
 const RATE_SLEW_DEBT = 0.18;
 const RATE_CEILING = 0.1;
-const RATE_CEILING_DEBT = 0.25;
+const RATE_CEILING_DEBT = 0.2;
+// What the element delivers per second of wall clock, divided by what it was
+// asked for.  1.0 is an engine that plays what it is told; 0.88 is one losing
+// an eighth of everything it decodes.  Measured only from windows in which we
+// did not touch the rate, because a correction in flight hides the loss.
+// Forward buffer this thin at the moment of a hitch means no data to show.
+const STARVED_AHEAD = 0.35;
 const D_DECAY_INTERVAL = 30000;
 const D_DECAY_STALL_GUARD = 60000;
 // How long the position may stand still before the picture counts as starved.
@@ -71,12 +77,17 @@ const median = (values) => {
 };
 
 export class SyncController {
-    constructor({ video, send, onStats, onOverlay, onPlayBlocked }) {
+    constructor({ video, send, onStats, onOverlay, onPlayBlocked, correction = true }) {
         this.video = video;
         this.send = send;
         this.onStats = onStats || (() => {});
         this.onOverlay = onOverlay || (() => {});
         this.onPlayBlocked = onPlayBlocked || (() => {});
+        // Debug switch (`?fix=0`): leave the picture alone -- no rate, no
+        // correction seeks -- so one reading can say whether the corrections
+        // are the stutter, or the phone is.  Following the host's play/pause
+        // and landing on the room's position at the start still happen.
+        this.correction = correction !== false;
 
         this.host = null;
         this.offset = 0;
@@ -110,12 +121,25 @@ export class SyncController {
         this.microSince = 0;
         this.microCount = 0;
         this.microTotalMs = 0;
+        this.stallNoData = false;
+        this.microNoData = false;
+        // Short hitches split by cause: 缺数据是网络/带宽，管线停是这台设备
+        // 自己。两者的处理方向完全相反，只数总数等于没数。
+        this.microStarved = 0;
+        this.stallStarved = 0;
         // Content time consumed per second of wall clock.  Below 1 the element
         // is losing time -- an engine problem no rate can win against, as
         // opposed to a correction that is merely too slow.
         this.advanceRatio = 1;
         this.advanceAt = 0;
         this.advanceClock = 0;
+        // The rate / write count that window was measured under, so a window
+        // polluted by our own correction can be thrown away.
+        this.advanceRate = 1;
+        this.advanceWrites = 0;
+        this.rateWrites = 0;
+        this.efficiency = 1;
+        this.efficiencyValid = false;
         // Times this controller stopped and started the picture, split by why:
         // the host paused, or the host hiccuped and we followed it.
         this.hostPauseCount = 0;
@@ -300,8 +324,10 @@ export class SyncController {
         const frozenFor = now - this.lastAdvanceAt;
         const stalled = playing && frozenFor > STALL_CONFIRM_MS;
 
+        const starved = this.bufferStarved();
         if (stalled && !this.stallSince) {
             this.stallSince = now - frozenFor;
+            this.stallNoData = starved;
         } else if (!stalled && this.stallSince) {
             const duration = now - this.stallSince;
             this.stallSince = 0;
@@ -310,14 +336,19 @@ export class SyncController {
                 this.increaseD(duration > 2000 ? 0.4 : 0.2);
                 this.stallCount += 1;
                 this.stallTotalMs += duration;
+                if (this.stallNoData) this.stallStarved += 1;
             }
+            this.stallNoData = false;
         }
         // The same measurement with a much lower threshold, so a phone that
         // hitches for a few hundred milliseconds -- and never lights the
         // overlay -- still shows up in the report.
         const short = playing && frozenFor > MICRO_FREEZE_MS;
         if (short) {
-            if (!this.microSince) this.microSince = now - frozenFor;
+            if (!this.microSince) {
+                this.microSince = now - frozenFor;
+                this.microNoData = starved;
+            }
         } else if (this.microSince) {
             const duration = now - this.microSince;
             this.microSince = 0;
@@ -325,7 +356,9 @@ export class SyncController {
             if (duration > MICRO_FREEZE_MS && duration <= STALL_CONFIRM_MS) {
                 this.microCount += 1;
                 this.microTotalMs += duration;
+                if (this.microNoData) this.microStarved += 1;
             }
+            this.microNoData = false;
         }
         this.measureAdvanceRatio(playing, position, now);
         this.setStallOverlay(stalled);
@@ -347,19 +380,59 @@ export class SyncController {
         if (!this.advanceAt) {
             this.advanceAt = now;
             this.advanceClock = position;
+            this.advanceRate = Number(this.video.playbackRate) || 1;
+            this.advanceWrites = this.rateWrites;
             return;
         }
         const span = now - this.advanceAt;
         if (span < ADVANCE_WINDOW_MS) return;
         const gained = position - this.advanceClock;
-        if (gained >= 0) this.advanceRatio = gained / (span / 1000);
+        if (gained >= 0) {
+            this.advanceRatio = gained / (span / 1000);
+            // Our own correction drives the delivered ratio towards 1, which
+            // would make a losing device look healthy -- so a window in which
+            // we wrote the rate says nothing about the device and is dropped.
+            if (this.rateWrites === this.advanceWrites) {
+                const seen = this.advanceRatio / Math.max(0.25, this.advanceRate);
+                this.efficiency = this.efficiencyValid
+                    ? this.efficiency * 0.6 + seen * 0.4
+                    : seen;
+                this.efficiencyValid = true;
+            }
+        }
         this.advanceAt = now;
         this.advanceClock = position;
+        this.advanceRate = Number(this.video.playbackRate) || 1;
+        this.advanceWrites = this.rateWrites;
     }
 
     /** A clock jump is not elapsed time; start the window over. */
     resetAdvanceWindow() {
         this.advanceAt = 0;
+    }
+
+    /**
+     * Nothing to show, or data present and the pipeline stopped anyway?
+     *
+     * The two read identically in the freeze figures and need opposite fixes:
+     * an empty buffer at the playhead is a fetch/bandwidth problem, where the
+     * answer is to ask for less bitrate; a full buffer under a stopped clock is
+     * the device itself, where asking for a faster rate makes it worse.
+     */
+    bufferStarved() {
+        const video = this.video;
+        const position = Number(video.currentTime) || 0;
+        try {
+            const ranges = video.buffered;
+            for (let i = 0; i < ranges.length; i += 1) {
+                if (ranges.start(i) <= position + 0.5 && ranges.end(i) > position) {
+                    return ranges.end(i) - position < STARVED_AHEAD;
+                }
+            }
+        } catch {
+            return true;
+        }
+        return true;
     }
 
     /** Own the overlay only while starved, and only when it changes state. */
@@ -404,8 +477,19 @@ export class SyncController {
         this.microSince = 0;
         this.microCount = 0;
         this.microTotalMs = 0;
+        this.microStarved = 0;
+        this.stallStarved = 0;
+        this.stallNoData = false;
+        this.microNoData = false;
         this.advanceRatio = 1;
         this.advanceAt = 0;
+        // A new stream is a new device reading: whatever we learned about how
+        // this element keeps up does not carry over.
+        this.efficiency = 1;
+        this.efficiencyValid = false;
+        this.advanceRate = 1;
+        this.advanceWrites = 0;
+        this.rateWrites = 0;
         this.hostPauseCount = 0;
         this.hostStallCount = 0;
         this.playCount = 0;
@@ -525,11 +609,20 @@ export class SyncController {
         // A stopped clock cannot be steered: changing the rate of a starved
         // element does nothing, and a seek usually throws away what little it
         // buffered.  Let it recover, with one slow re-priming seek in case the
-        // fetch is stuck for good.
+        // fetch is stuck for good.  This stays on under `?fix=0` -- it is there
+        // to keep a dead stream from staying dead, and a test that can leave
+        // the picture frozen for good would answer nothing.
         if (advance.stalled) {
             if (advance.frozenFor > STALL_RECOVER_MS && now - this.lastAnySeek > STALL_RECOVER_MS) {
                 this.hardSeek(target, true);
             }
+            this.report();
+            return;
+        }
+
+        // `?fix=0`: no rate, no drift seek.  What is left is what the device
+        // does on its own, which is the number the test is after.
+        if (!this.correction) {
             this.report();
             return;
         }
@@ -611,6 +704,7 @@ export class SyncController {
         // flush.
         const releasing = Math.abs(rate - base) <= 0.005;
         if (!releasing && Math.abs(rate - current) < RATE_DEADBAND) return;
+        this.rateWrites += 1;
         this.video.playbackRate = rate;
         this.pendingRate = rate;
     }
@@ -687,9 +781,16 @@ export class SyncController {
             frames: quality ? quality.totalVideoFrames : null,
             stalls: this.stallCount,
             stallMs: Math.round(this.stallTotalMs),
-            // Hitches too short to be counted as stalls above.
+            // Hitches too short to be counted as stalls above, and how many of
+            // them had no data to show rather than a stalled pipeline.
             shortStalls: this.microCount,
             shortStallMs: Math.round(this.microTotalMs),
+            shortStarved: this.microStarved,
+            stallStarved: this.stallStarved,
+            // What this element delivers per second of wall clock, divided by
+            // what it was asked for.  Below 1 the device -- not the network --
+            // is where the time goes.
+            efficiency: this.efficiencyValid ? this.efficiency : null,
             seeks: this.seekCount,
             correctionSeeks: this.correctionSeeks,
             positionSeeks: this.positionSeeks,
@@ -701,6 +802,9 @@ export class SyncController {
             hostPauses: this.hostPauseCount,
             hostStalls: this.hostStallCount,
             resumes: this.playCount,
+            // False only under `?fix=0`, where the rate above says nothing
+            // about the device -- the reading has to say so itself.
+            correction: this.correction,
         };
     }
 
