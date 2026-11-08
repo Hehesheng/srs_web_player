@@ -1,10 +1,11 @@
 /**
  * HLS glue for the transcoded path.
  *
- * Jellyfin hands us an event playlist that grows while the movie is encoded,
- * so this is live playback, not a fixed duration media element.  Everything
- * keeps the video's own clock (relative to the start of the transcode); the
- * caller adds `media_start` when it needs a wall-clock position.
+ * Jellyfin hands us the item as a VOD playlist whose segments are produced on
+ * demand, so the element's clock runs from the item's own first segment --
+ * that is what `media_start` names, and item time is `media_start` plus the
+ * element's clock.  Where the room wants playback to *begin* is a separate
+ * number (`media_resume`), which is what `startAt` carries here.
  *
  * Media Source does the demuxing wherever it exists -- including iOS 17.1+,
  * which exposes ManagedMediaSource for exactly this.  That matters more than it
@@ -71,8 +72,28 @@ function managedOnly() {
  * itself on its own schedule.  A phone that cannot hold a Media Source session
  * open still gets a picture this way, which beats an error card.
  */
-function playNative(video, url) {
+function playNative(video, url, startAt = 0) {
     nativeOnly.add(video);
+    // The playlist may carry `#EXT-X-START`, but Safari does not promise to
+    // honour it in a VOD list, and opening at the item's first segment while
+    // the bar shows the host's position is the bug this whole path exists to
+    // avoid.  So: open, then land on the room's position ourselves.
+    const at = Number(startAt) || 0;
+    if (at > 0.5) {
+        const move = () => {
+            video.removeEventListener("loadedmetadata", move);
+            try {
+                const end = Number.isFinite(video.duration) && video.duration > 0
+                    ? Math.max(0, video.duration - 0.05)
+                    : at;
+                video.currentTime = Math.min(at, end);
+            } catch {
+                // Metadata arrived without a seekable range; the item start is
+                // a worse position than the room's, but it is still a picture.
+            }
+        };
+        video.addEventListener("loadedmetadata", move);
+    }
     video.src = url;
     video.load();
     return null;
@@ -81,16 +102,20 @@ function playNative(video, url) {
 /**
  * Play `url` on `video`, using hls.js when the browser needs it.
  *
+ * `startAt` is where in the stream playback should open (stream time, i.e.
+ * item time minus `media_start`); 0 or less means "from the beginning".
  * Returns the hls.js instance, or null when playback falls back to the
  * element's own HLS support (old Safari, a phone that lost its session).
  */
-export function attachHls(video, url, { onError } = {}) {
+export function attachHls(video, url, { onError, startAt = 0 } = {}) {
     detachHls(video);
     if (!video || !url) return null;
 
+    const at = Math.max(0, Number(startAt) || 0);
+
     if (!hlsSupported() || nativeOnly.has(video)) {
         // No Media Source here, or this element already lost its session once.
-        return playNative(video, url);
+        return playNative(video, url, at);
     }
 
     const Hls = window.Hls;
@@ -107,7 +132,9 @@ export function attachHls(video, url, { onError } = {}) {
         levelLoadingMaxRetry: 6,
         fragLoadingTimeOut: 45000,
         fragLoadingMaxRetry: 6,
-        startPosition: -1,
+        // Above 0 this is where hls.js opens the stream; -1 keeps its default
+        // of "wherever the playlist says", which is the item's first segment.
+        startPosition: at > 0.5 ? at : -1,
         enableWorker: true,
     });
     attached.set(video, { instance });
@@ -131,7 +158,9 @@ export function attachHls(video, url, { onError } = {}) {
             if (mediaRepaired.has(video)) {
                 if (managedOnly()) {
                     detachHls(video);
-                    return playNative(video, url);
+                    // Same room position, different engine: dropping to the
+                    // element must not also drop the viewer back to item 0.
+                    return playNative(video, url, at);
                 }
             } else {
                 try {

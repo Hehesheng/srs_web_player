@@ -612,9 +612,11 @@ function applyHostPlaylistPayload(data) {
 // The transcoder's epoch names one continuous stream.  A seek bumps it, and
 // every player then has to follow the new one instead of the dead old stream.
 let hostAttachedEpoch = -1;
-// Where the room's current stream starts, kept fresh from every payload that
+// Where the room's current stream sits, kept fresh from every payload that
 // carries it so a switch never has to wait for a websocket round trip.
-const hostStream = { epoch: 0, start: 0, url: null };
+// `start` is the item time of the stream's first segment and `resume` is where
+// in the item the room wants playback to open; the two are only equal at 0.
+const hostStream = { epoch: 0, start: 0, resume: 0, url: null };
 
 function noteStream(fields, url) {
     if (!fields) return;
@@ -622,11 +624,18 @@ function noteStream(fields, url) {
     if (fields.media_start !== undefined) {
         hostStream.start = Math.max(0, Number(fields.media_start) || 0);
     }
+    if (fields.media_resume !== undefined) {
+        hostStream.resume = Math.max(0, Number(fields.media_resume) || 0);
+    }
     if (url !== undefined) hostStream.url = url;
 }
 
 function roomMediaStart() {
     return hostStream.start;
+}
+
+function roomMediaResume() {
+    return hostStream.resume;
 }
 
 function roomMediaEpoch() {
@@ -662,11 +671,13 @@ function switchHostToMedia(media, mediaUrl) {
         return;
     }
     if (media.playback_mode === "hls") {
-        // Server-side transcode: the browser gets a growing playlist whose
-        // clock starts wherever the transcode started, not at the item start.
+        // Server-side transcode: the browser gets the item as a VOD playlist
+        // whose clock starts at the item's first segment, so the room's own
+        // position arrives separately and is where playback opens.
         host.switchHls(mediaUrl || hostStream.url || (state.room && state.room.media_url), {
             start: roomMediaStart(),
             duration: Number(media.duration) || 0,
+            resume: roomMediaResume(),
         });
         hostAttachedEpoch = roomMediaEpoch();
         return;
@@ -1184,6 +1195,10 @@ function followHostStream() {
     host.switchHls(hostStream.url, {
         start: roomMediaStart(),
         duration: Number(media.duration) || 0,
+        // A restart is a seek, a bitrate change or a subtitle change: all of
+        // them mean "carry on from where the room is", which is what the new
+        // epoch's resume position says.
+        resume: roomMediaResume(),
     });
     hostAttachedEpoch = epoch;
     if (wasPlaying) host.play();
@@ -2367,14 +2382,16 @@ function wire() {
             const controller = state.member && state.member.controller;
             // A transcoded stream's clock starts where the transcode started,
             // so the bar shows item time rather than stream time.
-            const offset = controller && controller.isHls ? controller.timeOffset : 0;
             const total =
                 controller && controller.isHls && controller.mediaDuration > 0
                     ? controller.mediaDuration
                     : Number.isFinite(video.duration)
                       ? video.duration
                       : 0;
-            const position = (Number(video.currentTime) || 0) + offset;
+            const position =
+                controller && controller.isHls
+                    ? controller.itemTime()
+                    : Number(video.currentTime) || 0;
             const percent = total > 0 ? Math.min(100, Math.max(0, (position / total) * 100)) : 0;
             fill.style.width = `${percent.toFixed(2)}%`;
             line.style.width = `${percent.toFixed(2)}%`;
@@ -2621,6 +2638,9 @@ function installDebugHook() {
             D: sync ? sync.D : null,
             target: sync ? sync.targetPosition() : null,
             videoTime: video ? video.currentTime : null,
+            // What the member's own bar reads: item time, which holds still
+            // while a re-opened stream is still coming up.
+            itemTime: member && member.isHls ? member.itemTime() : null,
             paused: video ? video.paused : null,
             readyState: video ? video.readyState : null,
             // Local playback health, which is what an iOS report needs: whether

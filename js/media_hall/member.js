@@ -44,6 +44,11 @@ export class MemberController {
         this.timeOffset = 0;
         this.mediaDuration = 0;
         this.mediaEpoch = null;
+        // A position a restarted stream was asked to open at and has not
+        // reached yet; until it does the element still reports 0 (see
+        // itemTime()).
+        this.pendingStart = null;
+        this.pendingStartUntil = 0;
 
         this.ws = null;
         this.sync = null;
@@ -241,6 +246,7 @@ export class MemberController {
         this.mediaId = media.media_id;
         if (room.media_url) this.session.media_url = room.media_url;
         if (room.media_start !== undefined) this.session.media_start = room.media_start;
+        if (room.media_resume !== undefined) this.session.media_resume = room.media_resume;
         this.session.media = media;
 
         const epoch = Number(room.media_epoch) || 0;
@@ -285,6 +291,23 @@ export class MemberController {
         this.timeOffset = Math.max(0, Number(this.session.media_start) || 0);
     }
 
+    /** Where this viewer is in the item; the element's clock is stream time. */
+    itemTime() {
+        const clock = Number(this.video.currentTime) || 0;
+        // A stream we just re-opened reports 0 until its segments arrive; the
+        // bar would dip to the item's start for those seconds.
+        if (this.pendingStart !== null) {
+            // Done once the element has actually landed there; until then the
+            // clock reads either the old stream's tail or the new one's zero.
+            if (Math.abs(clock - this.pendingStart) <= 1 || performance.now() > this.pendingStartUntil) {
+                this.pendingStart = null;
+            } else {
+                return this.timeOffset + this.pendingStart;
+            }
+        }
+        return this.timeOffset + clock;
+    }
+
     switchMedia() {
         const video = this.video;
         if (!this.session.media_url) {
@@ -316,7 +339,15 @@ export class MemberController {
         this.isHls = true;
         this.mediaDuration = Math.max(0, Number(media.duration) || 0);
         this.timeOffset = Math.max(0, Number(this.session.media_start) || 0);
+        // Open where the room restarted the stream.  The clock controller then
+        // pulls this element onto the host's own position within a second, so
+        // this only has to be close, not exact.
+        const resume = Number(this.session.media_resume);
+        const startAt = Number.isFinite(resume) ? resume - this.timeOffset : 0;
+        this.pendingStart = startAt > 0.5 ? startAt : null;
+        this.pendingStartUntil = performance.now() + 20000;
         attachHls(this.video, this.session.media_url, {
+            startAt,
             onError: () => {
                 this.onOverlay("media", "转码流已中断", "重试", () => this.retrySource());
                 this.onError("转码流出错，请点击重试");
@@ -329,6 +360,8 @@ export class MemberController {
         this.isHls = false;
         this.timeOffset = 0;
         this.mediaDuration = 0;
+        this.pendingStart = null;
+        this.pendingStartUntil = 0;
     }
 
     clearMedia() {

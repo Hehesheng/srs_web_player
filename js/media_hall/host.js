@@ -44,11 +44,28 @@ export class HostController {
         this.isHls = false;
         this.timeOffset = 0;
         this.mediaDuration = 0;
+        // A position we asked a stream to open at and it has not reached yet.
+        this.pendingStart = null;
+        this.pendingStartUntil = 0;
     }
 
     /** The element's clock is stream-relative; callers want item time. */
     absoluteTime() {
-        return this.timeOffset + (Number(this.video.currentTime) || 0);
+        const clock = Number(this.video.currentTime) || 0;
+        // A restarted stream opens at its first segment and only lands on the
+        // room's position once those segments arrive.  Reporting the 0 it
+        // shows meanwhile would dip the bar -- and every member's target --
+        // back to the item's start for those seconds.
+        if (this.pendingStart !== null) {
+            // Done once the element has actually landed there; until then the
+            // clock reads either the old stream's tail or the new one's zero.
+            if (Math.abs(clock - this.pendingStart) <= 1 || performance.now() > this.pendingStartUntil) {
+                this.pendingStart = null;
+            } else {
+                return this.timeOffset + this.pendingStart;
+            }
+        }
+        return this.timeOffset + clock;
     }
 
     effectiveDuration() {
@@ -214,7 +231,13 @@ export class HostController {
     sendState(isSeek) {
         const video = this.video;
         if (!this.worker || !this.ready) return;
-        const position = Number(video.currentTime) || 0;
+        // Stream-relative on purpose: members are watching the same transcode,
+        // so they compare against their own element clock.  That clock reads 0
+        // while a restarted stream is still opening, and publishing that would
+        // pull everyone back to the item's start for those seconds -- so a
+        // stream we just re-opened reports the position it was asked to open
+        // at instead.
+        const position = this.absoluteTime();
         const playing = !video.paused && !video.ended;
         const buffering = this.trackAdvance();
         this.lastSentAt = performance.now();
@@ -222,8 +245,6 @@ export class HostController {
             type: isSeek ? "seek" : "state",
             payload: {
                 seq: this.seq,
-                // Stream-relative on purpose: members are watching the same
-                // transcode, so they compare against their own element clock.
                 position: Number(position.toFixed(3)),
                 rate: Number((Number(video.playbackRate) || 1).toFixed(3)),
                 playing,
@@ -293,22 +314,29 @@ export class HostController {
         this.onProgress(this.progressSnapshot({ paused: true, waiting: false, position: 0 }));
     }
 
-    /** Switch to a Jellyfin transcode: a live playlist, not a fixed file. */
-    switchHls(url, { start = 0, duration = 0 } = {}) {
+    /** Switch to a Jellyfin transcode: a whole-item playlist, not a file. */
+    switchHls(url, { start = 0, duration = 0, resume = null } = {}) {
         this.resetHlsState();
-        this.loadHls(url, { start, duration, restart: true });
+        this.loadHls(url, { start, duration, resume, restart: true });
     }
 
     /**
-     * Attach a transcoded stream.  `start` is where in the item the stream
-     * begins, which is only zero for the first transcode of an item.
+     * Attach a transcoded stream.
+     *
+     * `start` is where in the item the stream's first segment sits (0 for a
+     * Jellyfin transcode, which always hands over the item from its start),
+     * and `resume` is where in the item this room wants playback to open --
+     * the position a seek or a bitrate change restarts at.
      */
-    loadHls(url, { start = 0, duration = 0, restart = false } = {}) {
+    loadHls(url, { start = 0, duration = 0, restart = false, resume = null } = {}) {
         this.file = null;
         if (this.worker) this.worker.postMessage({ type: "file", file: null, mediaId: null });
         this.isHls = true;
         this.timeOffset = Math.max(0, Number(start) || 0);
         this.mediaDuration = Math.max(0, Number(duration) || 0);
+        const wanted = resume === null || resume === undefined
+            ? this.timeOffset
+            : Math.max(this.timeOffset, Number(resume) || 0);
         this.objectUrl = null;
         this.ready = false;
         this.waiting = true;
@@ -319,7 +347,15 @@ export class HostController {
         } catch {
             // ignore
         }
+        const startAt = wanted - this.timeOffset;
+        // Until the new stream's own segments arrive the element reports 0, so
+        // hold the room's position in the meantime (see absoluteTime()).
+        this.pendingStart = startAt > 0.5 ? startAt : null;
+        this.pendingStartUntil = performance.now() + 20000;
         attachHls(this.video, url, {
+            // Stream time of the room's position: the element's clock runs from
+            // the stream's first segment, one item-time offset below the item.
+            startAt,
             onError: () => this.onError("转码流已中断，正在重新连接", { kind: "hls" }),
         });
         this.onProgress(this.progressSnapshot({ paused: true, waiting: true, position: 0 }));
@@ -331,12 +367,16 @@ export class HostController {
         this.isHls = false;
         this.timeOffset = 0;
         this.mediaDuration = 0;
+        this.pendingStart = null;
+        this.pendingStartUntil = 0;
     }
 
     /** The transcode advanced the stream start (a seek); keep item time right. */
     setHlsStart(start) {
         if (!this.isHls) return;
         this.timeOffset = Math.max(0, Number(start) || 0);
+        this.pendingStart = null;
+        this.pendingStartUntil = 0;
     }
 
     /** Drop the current media when the playlist becomes empty. */
