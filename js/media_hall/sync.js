@@ -46,6 +46,19 @@ const RATE_CEILING_DEBT = 0.2;
 // did not touch the rate, because a correction in flight hides the loss.
 // Forward buffer this thin at the moment of a hitch means no data to show.
 const STARVED_AHEAD = 0.35;
+// A device that will not go faster than real time.  Asked for clearly more than
+// the host's own rate, it still delivers no more than a second of content per
+// second of wall clock -- and spends the difference on stalls, which is the
+// picture the viewer sees.  The ask has to be a real push (a device losing a
+// tenth of everything still *does* go faster when pushed, so a mild ask that
+// lands on real time is not evidence), and one measurement like that is noise;
+// two in a row is a ceiling.
+const SAT_ASK = 0.15;
+const SAT_DELIVER = 1.05;
+// ... unless the freeze took most of the window, which points at the fetch
+// rather than at the device.
+const SAT_FROZEN_SHARE = 0.3;
+const SAT_WINDOWS = 2;
 const D_DECAY_INTERVAL = 30000;
 const D_DECAY_STALL_GUARD = 60000;
 // How long the position may stand still before the picture counts as starved.
@@ -137,9 +150,14 @@ export class SyncController {
         // polluted by our own correction can be thrown away.
         this.advanceRate = 1;
         this.advanceWrites = 0;
+        this.advanceStallMs = 0;
         this.rateWrites = 0;
         this.efficiency = 1;
         this.efficiencyValid = false;
+        // Not cleared with the media: this is a fact about the phone, and a
+        // re-opened stream does not make it a different phone.
+        this.rateSaturated = false;
+        this.satWindows = 0;
         // Times this controller stopped and started the picture, split by why:
         // the host paused, or the host hiccuped and we followed it.
         this.hostPauseCount = 0;
@@ -382,6 +400,7 @@ export class SyncController {
             this.advanceClock = position;
             this.advanceRate = Number(this.video.playbackRate) || 1;
             this.advanceWrites = this.rateWrites;
+            this.advanceStallMs = this.stallTotalMs;
             return;
         }
         const span = now - this.advanceAt;
@@ -399,11 +418,46 @@ export class SyncController {
                     : seen;
                 this.efficiencyValid = true;
             }
+            this.probeRateCeiling(span);
         }
         this.advanceAt = now;
         this.advanceClock = position;
         this.advanceRate = Number(this.video.playbackRate) || 1;
         this.advanceWrites = this.rateWrites;
+        this.advanceStallMs = this.stallTotalMs;
+    }
+
+    /**
+     * Did asking for more than real time buy anything?
+     *
+     * Measured over the window that just closed: if we asked for a rate above
+     * the host's own and the element still delivered about one second of
+     * content per second of wall clock, it has no headroom to give -- and the
+     * correction keeps asking, which is what turns a device near its limit
+     * into a device that stutters.  Two such windows stop the asking for the
+     * rest of the session; the downward half of the correction stays, because
+     * being ahead is still worth slowing down.
+     */
+    probeRateCeiling(span) {
+        if (this.rateSaturated) return;
+        const base = Number(this.host && this.host.rate) || 1;
+        const held = Number(this.video.playbackRate) || 1;
+        if (this.advanceRate < base + SAT_ASK || held < base + SAT_ASK) {
+            // Not a window we can judge: nothing was being asked of it.
+            return;
+        }
+        const frozen = (this.stallTotalMs - this.advanceStallMs) / span;
+        if (this.advanceRatio > SAT_DELIVER) {
+            // It did go faster, so there is headroom after all.
+            this.satWindows = 0;
+            return;
+        }
+        if (frozen >= SAT_FROZEN_SHARE) return;
+        this.satWindows += 1;
+        if (this.satWindows < SAT_WINDOWS) return;
+        this.rateSaturated = true;
+        this.satWindows = 0;
+        console.info("[hall] 这台设备跑不到实时以上的倍速，之后只往下纠偏");
     }
 
     /** A clock jump is not elapsed time; start the window over. */
@@ -647,9 +701,14 @@ export class SyncController {
             const owed = this.inDebt;
             const slew = owed ? RATE_SLEW_DEBT : RATE_SLEW;
             const ceiling = owed ? RATE_CEILING_DEBT : RATE_CEILING;
+            // A device measured to have no headroom above real time keeps the
+            // downward half of the correction and loses the upward half: the
+            // upward half is what it pays for in stalls.  Catching up is then
+            // the drift rule's business (one seek for a real deficit).
+            const up = this.rateSaturated ? 0 : ceiling;
             let rate = base;
             if (magnitude > DRIFT_TOLERANCE) {
-                rate = clamp(base - drift * slew, base - ceiling, base + ceiling);
+                rate = clamp(base - drift * slew, base - ceiling, base + up);
             }
             rate = clamp(rate, 0.25, 4);
             this.applyRate(rate, base, drift, target, magnitude, now);
@@ -791,6 +850,11 @@ export class SyncController {
             // what it was asked for.  Below 1 the device -- not the network --
             // is where the time goes.
             efficiency: this.efficiencyValid ? this.efficiency : null,
+            // How many times we touched the rate (each one can cost a hitch)
+            // and whether this device was measured to have no headroom above
+            // real time.
+            rateWrites: this.rateWrites,
+            rateSaturated: this.rateSaturated,
             seeks: this.seekCount,
             correctionSeeks: this.correctionSeeks,
             positionSeeks: this.positionSeeks,
