@@ -3,6 +3,7 @@
  * switching and the small amount of chrome around the two player modes.
  */
 
+import { AnalysisPanel } from "./analysis.js";
 import { hlsAttached } from "./hls.js";
 import { HostController } from "./host.js";
 import { JellyfinPicker } from "./jellyfin.js";
@@ -79,6 +80,9 @@ function initialCorrectMode() {
 
 const HALL_CORRECT_MODE = initialCorrectMode();
 const HALL_RATE_CORRECTION = !isIOSLike();
+
+// 实时分析（小格 + 一分钟曲线 + 原始数据行）。默认就在，`?debug=0` 才关。
+let memberAnalysis = null;
 
 let hostRoomState = null;
 let hostRoomStateTs = 0;
@@ -1685,23 +1689,19 @@ function memberEngineLabel() {
 }
 
 /**
- * The `?debug` health line.
+ * 实时分析最下面那行原始数据。
  *
- * Written on every stats tick but only visible with `?debug`; it exists so a
- * stutter reported from one device comes back as numbers — which engine is
- * playing, how much is buffered ahead, how many frames were dropped, how many
- * freezes we measured and how fast the clock is really running.
+ * 每个统计拍都会重写；它是「实时分析」里唯一能整行复制的东西（复制数据 按钮
+ * 复制的就是它），所以这里保持一行等宽字：一台设备报卡顿，回来的就该是数字
+ * —— 哪个引擎在放、前向还有多少、掉了多少帧、量到几次停顿、时钟实际走多快。
  *
- * The last few cells are what separate the causes of a stutter that only one
- * device shows: 推进 below 1.00 means the engine loses time (a rate correction
- * cannot win), 跳转 rising means the corrections are the hitch, 启停 rising
- * means the picture is being stopped and restarted under the viewer.  失速
- * carries its own split -- 缺N counts the hitches that happened with nothing
- * buffered at the playhead, so the rest are the device stalling with data in
- * hand, which no amount of fetching will fix.  倍速 后面的 写N 是改写次数：
- * 桌面端会用它把漂移骑过去（每次都可能是一下停顿），手机上纠偏只用跳转，
- * 那里除了房主自己换倍速应该一直是 0。纠偏N 是这台机器的设置（member 页
- * 顶栏可选），关掉就是它自己跑的样子。
+ * 后面几格是用来分开「只有一台设备才出现的卡顿」的成因的：推进低于 1.00
+ * 说明是引擎在丢时间（倍速纠偏赢不了），跳转在涨说明卡顿是我们自己纠偏纠出来
+ * 的，启停在涨说明画面正在被反复停下来再起。失速自带一个拆解 —— 缺N 数的是
+ * 播放头那里没数据可放的次数，其余就是设备手里有数据却卡住了，多取多少都没用。
+ * 倍速 后面的 写N 是改写次数：桌面端会用它把漂移骑过去（每次都可能是一下停顿），
+ * 手机上纠偏只用跳转，那里除了房主自己换倍速应该一直是 0。纠偏N 是这台机器的
+ * 设置（顶栏可选），关掉就是它自己跑的样子。
  */
 function updateMemberHealth(health, stats) {
     const node = $("member-health");
@@ -1749,6 +1749,113 @@ function updateMemberHealth(health, stats) {
         ].filter(Boolean).join("/");
         cell("倍速", `${stats.rate.toFixed(2)}x${notes ? `(${notes})` : ""}`);
     }
+}
+
+/**
+ * 实时分析里的小格：一眼要看的读数。
+ *
+ * 和上面那行是同一份数据的两种读法 —— 小格管「现在多少、是不是出问题了」，
+ * 那行管「整行复制给我」。所以小格只挑头部指标，颜色也只用在真出问题的时候
+ * （卡顿、失速、效率掉了、倍速被固定），这张卡片现在默认常开，满屏颜色就没人
+ * 看了。
+ */
+function memberAnalysisTiles(health, stats) {
+    const starved = (health.shortStarved || 0) + (health.stallStarved || 0);
+    const dropRate = health.dropped != null && health.frames ? health.dropped / health.frames : null;
+    const tiles = [
+        { icon: "monitor", label: "引擎", value: memberEngineLabel() },
+        {
+            icon: "buffer", label: "前向缓存", value: `${health.buffer.toFixed(1)}s`,
+            // 不到两秒就是随时会顿一下的样子，值得染色。
+            tone: health.buffer < 2 ? "warn" : "ok",
+        },
+        {
+            icon: "film", label: "掉帧",
+            value: health.dropped == null ? "--" : `${health.dropped}/${health.frames}`,
+            note: dropRate == null ? "" : `${(dropRate * 100).toFixed(1)}%`,
+            tone: dropRate != null && dropRate > 0.005 ? "warn" : "ok",
+        },
+        {
+            icon: "alert", label: "卡顿", value: `${health.stalls}次`,
+            note: `${(health.stallMs / 1000).toFixed(1)}s`,
+            tone: health.stalls ? "bad" : "ok",
+        },
+        {
+            icon: "pulse", label: "失速", value: `${health.shortStalls == null ? "--" : health.shortStalls}次`,
+            note: `${(health.shortStallMs / 1000).toFixed(1)}s${starved ? ` · 缺数据${starved}` : ""}`,
+            tone: health.shortStalls ? "warn" : "ok",
+        },
+        {
+            icon: "skip", label: "跳转", value: `${health.seeks}次`,
+            // 纠偏是我们动的，定位是跟着房主换片/换码率动的，分开才看得出是谁。
+            note: `纠偏${health.correctionSeeks} · 定位${health.positionSeeks}`,
+        },
+        {
+            icon: "gauge", label: "推进", value: `${(health.advance == null ? 1 : health.advance).toFixed(2)}x`,
+            note: "1.00x 才正常",
+            tone: health.advance != null && health.advance < 0.98 ? "warn" : "ok",
+        },
+        {
+            icon: "zap", label: "效率",
+            value: health.efficiency == null ? "--" : `${Math.round(health.efficiency * 100)}%`,
+            note: "设备交出来的",
+            tone: health.efficiency != null && health.efficiency < 0.95 ? "warn" : "ok",
+        },
+        {
+            icon: "pause", label: "启停",
+            value: `${(health.hostPauses || 0) + (health.hostStalls || 0)}停`,
+            note: `${health.resumes || 0}起`,
+        },
+    ];
+    if (stats) {
+        const notes = [
+            stats.rateLocked ? "固定" : "",
+            health.correction === false ? "纠偏关" : `纠偏${health.seekAt}s`,
+            health.rateWrites ? `写${health.rateWrites}` : "",
+        ].filter(Boolean).join("/");
+        tiles.push({
+            icon: "timer", label: "倍速", value: `${stats.rate.toFixed(2)}x`, note: notes,
+            // 引擎不收倍速就意味着纠偏只剩跳转这一条路，是要知道的。
+            tone: stats.rateLocked ? "warn" : "ok",
+        });
+        const engine = stats.engine;
+        if (engine && engine.attach > 1) {
+            const why = [
+                engine.network ? `网${engine.network}` : "",
+                engine.repair ? `修${engine.repair}` : "",
+                engine.fallback ? `降${engine.fallback}` : "",
+                engine.giveup ? `弃${engine.giveup}` : "",
+            ].filter(Boolean).join("/");
+            tiles.push({ icon: "refresh", label: "重开流", value: `${engine.attach - 1}次`, note: why, tone: "warn" });
+        }
+    }
+    return tiles;
+}
+
+/** 小格 + 曲线：漂移和 RTT 来自同步控制器，缓存和推进来自播放健康快照。 */
+function updateMemberAnalysis(health, stats) {
+    if (!memberAnalysis || !health) return;
+    memberAnalysis.update({
+        tiles: memberAnalysisTiles(health, stats),
+        samples: {
+            drift: stats ? stats.drift : null,
+            buffer: health.buffer,
+            advance: health.advance,
+            rtt: stats ? stats.rtt : null,
+        },
+    });
+}
+
+/** 复制实时分析那一行原始数据 —— 报卡顿的时候要的就是这一行。 */
+async function copyMemberHealth() {
+    const node = $("member-health");
+    const text = node ? node.innerText.replace(/\s+/g, " ").trim() : "";
+    if (!text) {
+        toast("还没有数据", "info");
+        return;
+    }
+    const ok = await copyText(text);
+    toast(ok ? "已复制这一行数据" : "复制失败，请手动选中复制", ok ? "success" : "error");
 }
 
 function storedSubtitleSize() {
@@ -2249,6 +2356,7 @@ function startMember(session, room) {
             // in sync with small seeks instead — worth seeing on a phone.
             $("member-rate").textContent = `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`;
             updateMemberHealth(stats.health, stats);
+            updateMemberAnalysis(stats.health, stats);
         },
         onEnded: () => {
             setStatusBadge("member-host-badge", "已结束", "muted");
@@ -2383,6 +2491,7 @@ function wire() {
     }
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
+    $("btn-copy-health").addEventListener("click", copyMemberHealth);
     $("member-correct-mode").addEventListener("change", (event) => setMemberCorrectMode(event.target.value));
     $("btn-member-subtitles").addEventListener("click", toggleMemberSubtitles);
     $("btn-member-subtitle-menu").addEventListener("click", (event) => {
@@ -2750,11 +2859,20 @@ function wire() {
     });
 }
 
+/**
+ * 实时分析块默认就在（小格、一分钟曲线、原始数据行都是）。
+ *
+ * `?debug=0` 是唯一关掉它的开关：整块收起，`__hallDebug()` 也不装 —— 曲线画在
+ * 手机上是有成本的，而「先看看不做任何事时它自己什么样」这个读法仍然要留得住。
+ * 显式写了 `?debug`（不带 0）和默认是同一件事，老链接不会因此变化。
+ */
 function installDebugHook() {
     const params = new URLSearchParams(window.location.search);
-    if (!params.has("debug")) return;
-    const health = $("member-health");
-    if (health) health.classList.replace("hidden", "flex");
+    const panel = $("member-analysis");
+    if (params.get("debug") === "0") {
+        if (panel) panel.classList.add("hidden");
+        return;
+    }
     window.__hallDebug = () => {
         const member = state.member && state.member.controller;
         const sync = member && member.sync;
@@ -2823,6 +2941,8 @@ async function init() {
     setSubtitleSize(storedSubtitleSize());
     syncCorrectModeControl();
     wideMode = storedWideMode();
+    const analysis = $("member-analysis");
+    if (analysis) memberAnalysis = new AnalysisPanel(analysis);
     installDebugHook();
 
     try {

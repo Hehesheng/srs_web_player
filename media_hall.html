@@ -412,10 +412,6 @@
                 </div>
             </div>
 
-            <!-- 只有 ?debug 才显示：把「会不会卡」变成可读的数字。播放引擎、
-                 前向缓存、掉帧、实测卡顿次数与跳转次数。 -->
-            <div id="member-health" class="mb-3 hidden flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-slate-500"></div>
-
             <div id="member-shell" class="member-shell glass-card group relative overflow-hidden rounded-3xl bg-black">
                 <video id="member-video" playsinline webkit-playsinline class="max-h-[78vh] w-full object-contain"></video>
 
@@ -468,6 +464,77 @@
                             </button>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- 实时分析：默认常开，?debug=0 关掉。放在播放器下面而不是顶栏，
+                 是因为它是一屏数据；顶栏只留一眼要看的（房间 / RTT / 漂移 /
+                 纠偏 / 倍速）。小格是一眼看的读数，曲线是最近一分钟的趋势，
+                 最下面那行等宽字是全量原始数据（复制数据 按钮就复制它）。 -->
+            <div id="member-analysis" class="wide-hide glass-card mt-5 rounded-2xl p-5">
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <h2 class="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">
+                        <span class="relative flex h-2 w-2">
+                            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"></span>
+                            <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
+                        </span>
+                        实时分析
+                    </h2>
+                    <button id="btn-copy-health" type="button"
+                        class="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 transition hover:border-sky-500/50 hover:text-sky-300">复制数据</button>
+                </div>
+
+                <div id="member-tiles" data-tiles class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"></div>
+
+                <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <div data-chart="drift" data-color="#38bdf8" class="rounded-2xl border border-sky-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                        <div class="mb-1 flex items-center gap-2">
+                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-400"></span>
+                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-sky-300">漂移</span>
+                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                        </div>
+                        <canvas class="h-32 w-full"></canvas>
+                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                        </div>
+                    </div>
+                    <div data-chart="buffer" data-color="#34d399" class="rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                        <div class="mb-1 flex items-center gap-2">
+                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400"></span>
+                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-emerald-300">前向缓存</span>
+                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                        </div>
+                        <canvas class="h-32 w-full"></canvas>
+                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                        </div>
+                    </div>
+                    <div data-chart="advance" data-color="#fbbf24" class="rounded-2xl border border-amber-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                        <div class="mb-1 flex items-center gap-2">
+                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400"></span>
+                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-amber-300">推进</span>
+                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                        </div>
+                        <canvas class="h-32 w-full"></canvas>
+                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                        </div>
+                    </div>
+                    <div data-chart="rtt" data-color="#a78bfa" class="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-slate-900/60 to-slate-800/40 p-3">
+                        <div class="mb-1 flex items-center gap-2">
+                            <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400"></span>
+                            <span class="truncate text-[10px] font-bold uppercase tracking-widest text-violet-300">网络延迟</span>
+                            <span data-now class="ml-auto shrink-0 font-mono text-[10px] text-slate-300">--</span>
+                        </div>
+                        <canvas class="h-32 w-full"></canvas>
+                        <div class="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-600">
+                            <span class="shrink-0">60 秒</span><span data-range class="min-w-0 truncate"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4 border-t border-white/5 pt-3">
+                    <div id="member-health" class="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-slate-500"></div>
                 </div>
             </div>
 
