@@ -3,6 +3,7 @@
  * switching and the small amount of chrome around the two player modes.
  */
 
+import { hlsAttached } from "./hls.js";
 import { HostController } from "./host.js";
 import { JellyfinPicker } from "./jellyfin.js";
 import { MemberController } from "./member.js";
@@ -1614,6 +1615,41 @@ function updateMemberMembers(members) {
     });
 }
 
+/** Which of the two playback paths this element ended up on. */
+function memberEngineLabel() {
+    return hlsAttached($("member-video")) ? "媒体源(MSE)" : "系统播放器";
+}
+
+/**
+ * The `?debug` health line.
+ *
+ * Written on every stats tick but only visible with `?debug`; it exists so a
+ * stutter reported from one device comes back as numbers — which engine is
+ * playing, how much is buffered ahead, how many frames were dropped and how
+ * many freezes we actually measured.
+ */
+function updateMemberHealth(health) {
+    const node = $("member-health");
+    if (!node || !health) return;
+    const dropped = health.dropped == null ? "--" : health.dropped;
+    const frames = health.frames == null ? "--" : health.frames;
+    node.innerHTML = "";
+    const cell = (label, value) => {
+        const span = document.createElement("span");
+        span.append(`${label} `);
+        const strong = document.createElement("span");
+        strong.className = "text-slate-300";
+        strong.textContent = value;
+        span.append(strong);
+        node.append(span);
+    };
+    cell("引擎", memberEngineLabel());
+    cell("前向缓存", `${health.buffer.toFixed(1)}s`);
+    cell("掉帧", `${dropped}/${frames}`);
+    cell("卡顿", `${health.stalls}次/${(health.stallMs / 1000).toFixed(1)}s`);
+    cell("跳转", `${health.seeks}次`);
+}
+
 function storedSubtitleSize() {
     try {
         const value = localStorage.getItem(SUBTITLE_SIZE_KEY);
@@ -2067,6 +2103,7 @@ function startMember(session, room) {
             // "(固定)" means this device refuses rate changes and is being kept
             // in sync with small seeks instead — worth seeing on a phone.
             $("member-rate").textContent = `${stats.rate.toFixed(2)}x${stats.rateLocked ? "(固定)" : ""}`;
+            updateMemberHealth(stats.health);
         },
         onEnded: () => {
             setStatusBadge("member-host-badge", "已结束", "muted");
@@ -2568,6 +2605,8 @@ function wire() {
 function installDebugHook() {
     const params = new URLSearchParams(window.location.search);
     if (!params.has("debug")) return;
+    const health = $("member-health");
+    if (health) health.classList.replace("hidden", "flex");
     window.__hallDebug = () => {
         const member = state.member && state.member.controller;
         const sync = member && member.sync;
@@ -2592,6 +2631,8 @@ function installDebugHook() {
             stalled: sync ? Boolean(sync.stallSince) : null,
             frozenFor: sync ? Math.round(performance.now() - sync.lastAdvanceAt) : null,
             rateLocked: sync ? sync.rateLocked : null,
+            engine: memberEngineLabel(),
+            health: sync ? sync.healthSnapshot() : null,
         };
     };
 }

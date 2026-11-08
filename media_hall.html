@@ -404,6 +404,10 @@
                 </div>
             </div>
 
+            <!-- 只有 ?debug 才显示：把「会不会卡」变成可读的数字。播放引擎、
+                 前向缓存、掉帧、实测卡顿次数与跳转次数。 -->
+            <div id="member-health" class="mb-3 hidden flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-slate-500"></div>
+
             <div id="member-shell" class="member-shell glass-card group relative overflow-hidden rounded-3xl bg-black">
                 <video id="member-video" playsinline webkit-playsinline class="max-h-[78vh] w-full object-contain"></video>
 
@@ -513,7 +517,13 @@
     <div id="member-subtitle-menu" class="custom-scrollbar fixed z-[95] hidden w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-2xl backdrop-blur"></div>
 
     <script src="vendor/mp4box.all.min.js"></script>
-    <script src="js/hls-0.14.17.min.js"></script>
+    <!-- 1.7.x, not 0.14: iOS 17.1+ exposes ManagedMediaSource, and only the
+         newer engine uses it.  Without it an iPhone hands the playlist to the
+         system player -- a different pipeline with its own pacing, and the
+         only platform where this stream still hitched at segment boundaries.
+         (srs_gb28181.html still ships the old build on purpose; that page is
+         unrelated to this stream.) -->
+    <script src="js/hls-1.7.4.min.js"></script>
     <script src="js/media_hall/embedded_subs.js"></script>
     <script src="js/media_hall/mkv.js"></script>
     <script type="module" src="js/media_hall/main.js"></script>

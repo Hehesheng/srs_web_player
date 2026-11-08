@@ -71,6 +71,12 @@ export class SyncController {
         this.lastHardSeek = -1e9;
         this.lastAnySeek = -1e9;
         this.hardSeeks = [];
+        // Counters for the playback that is running now; they are what make a
+        // stutter one device sees and another does not measurable rather than
+        // a matter of opinion.
+        this.stallCount = 0;
+        this.stallTotalMs = 0;
+        this.seekCount = 0;
         this.bigDriftSince = 0;
         this.pendingInitialSeek = true;
         this.allowSeek = false;
@@ -251,7 +257,11 @@ export class SyncController {
             const duration = now - this.stallSince;
             this.stallSince = 0;
             this.lastStallAt = now;
-            if (duration > 200) this.increaseD(duration > 2000 ? 0.4 : 0.2);
+            if (duration > 200) {
+                this.increaseD(duration > 2000 ? 0.4 : 0.2);
+                this.stallCount += 1;
+                this.stallTotalMs += duration;
+            }
         }
         this.setStallOverlay(stalled);
         return { stalled, frozenFor, playing };
@@ -293,6 +303,9 @@ export class SyncController {
         this.lastPos = 0;
         this.lastAdvanceAt = 0;
         this.stallSince = 0;
+        this.stallCount = 0;
+        this.stallTotalMs = 0;
+        this.seekCount = 0;
         this.rateLocked = false;
         this.rateRefused = 0;
         this.pendingRate = null;
@@ -310,6 +323,7 @@ export class SyncController {
         }
 
         this.lastAnySeek = now;
+        this.seekCount += 1;
         // Forced seeks (initial positioning, resync) are not corrections and
         // must not block the 3s rule that follows a slow start.
         if (!force) {
@@ -503,6 +517,44 @@ export class SyncController {
         );
     }
 
+    /**
+     * Playback health as the numbers a stutter report needs.
+     *
+     * A hitch that never lights the buffering overlay leaves no trace in the
+     * drift figures, so the interesting values are the engine's own: how far
+     * ahead of the clock it has data, how many frames it rendered and dropped,
+     * and how many freezes we measured with `measureAdvance`.
+     */
+    healthSnapshot() {
+        const video = this.video;
+        const position = Number(video.currentTime) || 0;
+        let buffer = 0;
+        try {
+            const ranges = video.buffered;
+            for (let i = 0; i < ranges.length; i += 1) {
+                if (ranges.start(i) <= position + 0.5 && ranges.end(i) > position) {
+                    buffer = Math.max(buffer, ranges.end(i) - position);
+                }
+            }
+        } catch {
+            // No decoder state yet; "no forward buffer" is the honest read.
+        }
+        let quality = null;
+        try {
+            quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        } catch {
+            // Not every engine exposes it, and the element may be sourceless.
+        }
+        return {
+            buffer,
+            dropped: quality ? quality.droppedVideoFrames : null,
+            frames: quality ? quality.totalVideoFrames : null,
+            stalls: this.stallCount,
+            stallMs: Math.round(this.stallTotalMs),
+            seeks: this.seekCount,
+        };
+    }
+
     report() {
         const now = performance.now();
         if (now - this.lastStatsAt < 400) return;
@@ -517,6 +569,7 @@ export class SyncController {
             playing: !this.video.paused,
             buffering: Boolean(this.stallSince),
             online: this.host ? this.host.online !== false : false,
+            health: this.healthSnapshot(),
         });
     }
 }
