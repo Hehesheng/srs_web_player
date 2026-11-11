@@ -90,6 +90,8 @@ export class JellyfinPicker {
         this.seq = 0;
         this.loadingMore = false;
         this.wired = false;
+        // Which way in the config row is showing: "key" or "password".
+        this.mode = "key";
     }
 
     // -- server calls --------------------------------------------------
@@ -116,8 +118,45 @@ export class JellyfinPicker {
         return data;
     }
 
+    /**
+     * The other way in: the room logs in for us and answers with the token it
+     * got, which is what we then remember instead of the password.
+     */
+    async signIn(url, username, password) {
+        const data = await this.api("/jellyfin/session", {
+            method: "POST",
+            body: { url, username, password },
+        });
+        this.libraries = Array.isArray(data.libraries) ? data.libraries : [];
+        return data;
+    }
+
     // -- config row ----------------------------------------------------
-    /** Prefill the two fields from the last config, if there is one. */
+    /** Which half of the config row is showing: an API key or a login. */
+    setMode(mode) {
+        this.mode = mode === "password" ? "password" : "key";
+        const password = this.mode === "password";
+        const keyInput = document.getElementById("host-jellyfin-token");
+        const userInput = document.getElementById("host-jellyfin-username");
+        const passwordInput = document.getElementById("host-jellyfin-password");
+        if (keyInput) keyInput.classList.toggle("hidden", password);
+        if (userInput) userInput.classList.toggle("hidden", !password);
+        if (passwordInput) passwordInput.classList.toggle("hidden", !password);
+        const keyButton = document.getElementById("btn-jellyfin-mode-key");
+        const passwordButton = document.getElementById("btn-jellyfin-mode-password");
+        const paint = (button, active) => {
+            if (!button) return;
+            button.setAttribute("aria-pressed", active ? "true" : "false");
+            button.classList.toggle("font-bold", active);
+            button.classList.toggle("text-sky-300", active);
+            button.classList.toggle("text-slate-400", !active);
+        };
+        paint(keyButton, !password);
+        paint(passwordButton, password);
+        if (password && userInput && !userInput.value) userInput.focus();
+    }
+
+    /** Prefill the fields from the last config, if there is one. */
     fillConfigRow() {
         const saved = storedJellyfinConfig();
         const url = document.getElementById("host-jellyfin-url");
@@ -133,7 +172,12 @@ export class JellyfinPicker {
         if (!row) return;
         row.classList.toggle("hidden", !show);
         row.classList.toggle("flex", show);
-        if (show) this.fillConfigRow();
+        if (show) {
+            this.fillConfigRow();
+            // A failed attempt leaves the row on whichever half the host was
+            // using, so the fields they filled are still the ones on screen.
+            this.setMode(this.mode);
+        }
         if (hint) {
             hint.classList.toggle("hidden", !show);
             hint.classList.remove("text-rose-300");
@@ -144,7 +188,7 @@ export class JellyfinPicker {
                 hint.classList.add("text-rose-300");
             } else {
                 hint.textContent =
-                    "填 Jellyfin 的网址和一枚 API 密钥（Jellyfin 控制台 → 高级 → API 密钥）。密钥只存在这台浏览器里，服务器不保存任何配置。";
+                    "两种连法：填 Jellyfin 控制台里建的 API 密钥，或直接用账号和密码登录（密码只用于这一次登录，不会保存）。网址和令牌只存在这台浏览器里，服务器不保存任何配置。";
             }
         }
         if (show) {
@@ -160,10 +204,13 @@ export class JellyfinPicker {
     openConfig() {
         this.close();
         this.showConfig(true);
-        const key = document.getElementById("host-jellyfin-token");
-        if (key) {
-            key.focus();
-            key.select();
+        const target =
+            this.mode === "password"
+                ? document.getElementById("host-jellyfin-username")
+                : document.getElementById("host-jellyfin-token");
+        if (target) {
+            target.focus();
+            target.select();
         }
     }
 
@@ -218,30 +265,49 @@ export class JellyfinPicker {
     async submitConnect() {
         const urlInput = document.getElementById("host-jellyfin-url");
         const keyInput = document.getElementById("host-jellyfin-token");
+        const userInput = document.getElementById("host-jellyfin-username");
+        const passwordInput = document.getElementById("host-jellyfin-password");
         const button = document.getElementById("btn-jellyfin-connect");
         if (!urlInput || !keyInput || !button || button.disabled) return;
         const url = (urlInput.value || "").trim();
+        const byPassword = this.mode === "password";
         const token = (keyInput.value || "").trim();
-        if (!url || !token) {
-            this.showConfig(true, "请填写 Jellyfin 网址和密钥");
+        const username = ((userInput && userInput.value) || "").trim();
+        const password = (passwordInput && passwordInput.value) || "";
+        if (!url || (byPassword ? !username || !password : !token)) {
+            this.showConfig(
+                true,
+                byPassword ? "请填写 Jellyfin 网址、用户名和密码" : "请填写 Jellyfin 网址和密钥"
+            );
             return;
         }
         const label = button.textContent;
         button.disabled = true;
         button.textContent = "连接中…";
         try {
-            const data = await this.connect(url, token);
+            const data = byPassword
+                ? await this.signIn(url, username, password)
+                : await this.connect(url, token);
             const account = (data.jellyfin && data.jellyfin.user_name) || "";
             // The server hands back the address it settled on (a bare host
             // became https://…), so the field and the record agree.
             const settled = data.url || url;
             urlInput.value = settled;
-            saveJellyfinConfig(
-                settled,
-                token,
-                account,
-                data.jellyfin && data.jellyfin.user_id
-            );
+            // Remember the token, never the password: a login throws the
+            // password away and leaves us the token it traded for, so the next
+            // visit skips both fields.
+            const remembered = byPassword ? (data.token || "") : token;
+            if (remembered) {
+                saveJellyfinConfig(
+                    settled,
+                    remembered,
+                    account,
+                    data.jellyfin && data.jellyfin.user_id
+                );
+                keyInput.value = remembered;
+            }
+            if (passwordInput) passwordInput.value = "";
+            this.setMode("key");
             this.showConfig(false);
             const host = urlHost(settled);
             this.toast(account ? `已连接 Jellyfin：${host}（${account}）` : `已连接 Jellyfin：${host}`, "success");
@@ -264,7 +330,14 @@ export class JellyfinPicker {
         };
         on("btn-jellyfin-connect", "click", () => this.submitConnect());
         on("btn-jellyfin-cancel", "click", () => this.showConfig(false));
-        for (const id of ["host-jellyfin-url", "host-jellyfin-token"]) {
+        on("btn-jellyfin-mode-key", "click", () => this.setMode("key"));
+        on("btn-jellyfin-mode-password", "click", () => this.setMode("password"));
+        for (const id of [
+            "host-jellyfin-url",
+            "host-jellyfin-token",
+            "host-jellyfin-username",
+            "host-jellyfin-password",
+        ]) {
             on(id, "keydown", (event) => {
                 if (event.key === "Enter") {
                     event.preventDefault();
