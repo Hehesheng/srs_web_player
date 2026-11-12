@@ -959,12 +959,14 @@ async function addJellyfinItem(item) {
         persistHostSession();
         applyHostPlaylistPayload(data);
         if (data.active) {
-            // The film is starting behind the picker, so get out of its way.
-            if (jellyfinPicker) jellyfinPicker.close();
+            // The film starts behind the picker.  The overlay stays up: adding
+            // a series means queuing one episode after another, and closing on
+            // every pick made the host reopen the library each time.
             switchHostToMedia(data.media, data.media_url);
             state.host.play();
         }
-        toast(`已添加「${item.name || "Jellyfin 影片"}」`, "success");
+        const name = item.name || "Jellyfin 影片";
+        toast(data.active ? `已添加「${name}」，开始播放` : `已添加「${name}」`, "success");
     } catch (error) {
         toast(error.message || "添加失败", "error");
         throw error;
