@@ -1214,6 +1214,112 @@ function renderHostSubtitles(force) {
     applyHostVideoSubtitle();
 }
 
+// Audio tracks.  A browser cannot swap the track inside a file it already
+// plays, so the room picks one and Jellyfin (re)starts a transcode: choosing
+// here restarts every member's stream, exactly like a burned-in subtitle.
+let hostAudioMenuSignature = "";
+
+function hostAudioTracks(roomState) {
+    const tracks = roomState && roomState.jellyfin_audio_tracks;
+    return Array.isArray(tracks) ? tracks : [];
+}
+
+function hostAudioTrackLabel(track) {
+    const label = String((track && track.label) || "").trim();
+    return label || `音轨 ${track ? track.index : ""}`;
+}
+
+function hostAudioShortLabel() {
+    const tracks = hostAudioTracks(hostRoomState);
+    if (tracks.length < 2) return "音轨";
+    const current = hostRoomState && hostRoomState.jellyfin_audio;
+    const track = tracks.find((item) => Number(item.index) === Number(current)) || tracks[0];
+    // The menu shows the whole label; the button only has room for the language.
+    return hostAudioTrackLabel(track).split(" · ")[0] || "音轨";
+}
+
+function updateHostAudioButton() {
+    const button = $("btn-host-audio");
+    const label = $("host-audio-label");
+    if (!button) return;
+    const usable = hostAudioTracks(hostRoomState).length > 1;
+    button.disabled = !usable;
+    if (label) label.textContent = hostAudioShortLabel();
+    button.title = usable
+        ? "音轨：房主选择，成员跟随"
+        : "当前视频只有一条音轨";
+    if (!usable) closeHostAudioMenu();
+}
+
+function closeHostAudioMenu() {
+    const menu = $("host-audio-menu");
+    const button = $("btn-host-audio");
+    if (menu) menu.classList.add("hidden");
+    if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function toggleHostAudioMenu() {
+    const menu = $("host-audio-menu");
+    const button = $("btn-host-audio");
+    if (!menu || !button || button.disabled) return;
+    const open = menu.classList.toggle("hidden") === false;
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+        renderHostAudioMenu(true);
+        placeSubtitleMenu(menu, button);
+    }
+}
+
+async function chooseHostAudio(index) {
+    closeHostAudioMenu();
+    hostAudioMenuSignature = "";
+    const session = state.room;
+    if (!session || !state.host) return;
+    if (Number(index) === Number(hostRoomState && hostRoomState.jellyfin_audio)) return;
+    const position = Math.max(0, Number(state.host.absoluteTime()) || 0);
+    try {
+        await request(`/hall/api/rooms/${encodeURIComponent(session.room_id)}/hls/audio`, {
+            method: "POST",
+            headers: { "X-Host-Token": session.host_token },
+            body: { audio: Number(index), position },
+        });
+        toast("正在切换音轨…", "info");
+    } catch (error) {
+        toast(error.message || "切换音轨失败", "error");
+    }
+}
+
+function renderHostAudioMenu(force) {
+    const menu = $("host-audio-menu");
+    const button = $("btn-host-audio");
+    if (!menu || !button) return;
+    const tracks = hostAudioTracks(hostRoomState);
+    if (tracks.length < 2) {
+        closeHostAudioMenu();
+        return;
+    }
+    const current = hostRoomState && hostRoomState.jellyfin_audio;
+    const signature =
+        tracks.map((track) => `${track.index}:${track.label}`).join(",") + "|" + current;
+    if (!force && signature === hostAudioMenuSignature) return;
+    hostAudioMenuSignature = signature;
+    menu.textContent = "";
+    for (const track of tracks) {
+        const selected = Number(track.index) === Number(current);
+        menu.appendChild(
+            subtitleMenuOption(selected, hostAudioTrackLabel(track), selected ? "播放中" : "", () =>
+                chooseHostAudio(track.index)
+            )
+        );
+    }
+    placeSubtitleMenu(menu, button);
+}
+
+function renderHostAudio(force) {
+    updateHostAudioButton();
+    renderHostAudioMenu(force);
+}
+
 function applyHostVideoSubtitle() {
     const video = $("host-video");
     if (!video) return;
@@ -1312,6 +1418,7 @@ function applyHostRoomState(roomState) {
     if (Array.isArray(roomState.playlist)) setHostPlaylist(roomState.playlist);
     updateHostMediaLabel(roomState.media);
     renderHostSubtitles();
+    renderHostAudio();
     renderHostQuality();
     followHostStream();
 }
@@ -1404,13 +1511,22 @@ function wireHostSubtitleControls() {
         toggleHostSubtitleMenu();
     });
     $("host-subtitle-menu").addEventListener("click", (event) => event.stopPropagation());
-    document.addEventListener("click", () => closeHostSubtitleMenu());
+    $("btn-host-audio").addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleHostAudioMenu();
+    });
+    $("host-audio-menu").addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => {
+        closeHostSubtitleMenu();
+        closeHostAudioMenu();
+    });
     // The list is positioned against the window, so follow a resized window or
     // a page that scrolls under it.
     const replaceSubtitleMenus = (event) => {
-        if (event && event.target instanceof Element && event.target.id.endsWith("subtitle-menu")) return;
+        if (event && event.target instanceof Element && event.target.id.endsWith("-menu")) return;
         placeSubtitleMenu($("host-subtitle-menu"), $("btn-host-subtitle-menu"));
         placeSubtitleMenu($("member-subtitle-menu"), $("btn-member-subtitle-menu"));
+        placeSubtitleMenu($("host-audio-menu"), $("btn-host-audio"));
     };
     window.addEventListener("resize", replaceSubtitleMenus);
     window.addEventListener("scroll", replaceSubtitleMenus, true);
@@ -1523,6 +1639,7 @@ function startHost(session, file, room) {
     updateHostMembers(room ? room.members : []);
     setHostPlaylist((room && room.playlist) || []);
     renderHostSubtitles();
+    renderHostAudio();
     setStatusBadge("host-status", "等待连接", "muted");
     changeView("host");
 
