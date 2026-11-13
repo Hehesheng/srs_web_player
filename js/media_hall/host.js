@@ -86,6 +86,13 @@ export class HostController {
         return this.timeOffset + clock;
     }
 
+    /** How far into the item this element has data, in item time. */
+    bufferedTime() {
+        const ranges = this.video.buffered;
+        if (!ranges || !ranges.length) return 0;
+        return this.timeOffset + (Number(ranges.end(ranges.length - 1)) || 0);
+    }
+
     effectiveDuration() {
         if (this.isHls && this.mediaDuration > 0) return this.mediaDuration;
         return Number.isFinite(this.video.duration) ? this.video.duration : 0;

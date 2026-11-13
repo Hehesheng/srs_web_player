@@ -393,18 +393,20 @@ function validateHostFile(file) {
 async function createRoom() {
     showError("create-error", "");
     const name = ($("create-name").value || "").trim() || "媒体播放厅";
+    // The host's name is settled here, before the room exists: once inside,
+    // there is nothing to edit -- members simply see this name.
+    const hostName = ($("create-host-name")?.value || "").trim();
 
     await endStoredHostSession();
     const button = $("btn-create");
     setButtonsBusy(button, true, "正在创建…");
     try {
         // The room starts empty; the host picks what to watch from inside it.
-        // A name the host set in an earlier room comes along, so the member list
-        // says the same thing without them having to type it again.
         const data = await request("/hall/api/rooms", {
             method: "POST",
-            body: { name, host_name: storedHostName() },
+            body: { name, host_name: hostName },
         });
+        rememberHostName(hostName);
         const session = {
             room_id: data.room_id,
             room_code: data.room_code,
@@ -608,51 +610,6 @@ function rememberHostName(name) {
     }
 }
 
-function showHostNameRow(show) {
-    const row = $("host-name-row");
-    if (!row) return;
-    row.classList.toggle("hidden", !show);
-    row.classList.toggle("flex", show);
-    $("host-name-hint")?.classList.toggle("hidden", !show);
-    if (!show) return;
-    const input = $("host-name-input");
-    if (input) {
-        // 已经设过的名字优先，其次才是这台浏览器记住的那个。
-        input.value = hostDisplayName || storedHostName();
-        input.focus();
-        input.select();
-    }
-}
-
-async function submitHostName() {
-    const input = $("host-name-input");
-    const button = $("btn-host-name-save");
-    const session = state.room;
-    if (!input || !button || button.disabled || !session || !state.host) return;
-    const name = (input.value || "").trim();
-    setButtonsBusy(button, true, "保存中…");
-    try {
-        const data = await request(
-            `/hall/api/rooms/${encodeURIComponent(session.room_id)}/host_name`,
-            {
-                method: "POST",
-                headers: { "X-Host-Token": session.host_token },
-                body: { name },
-            }
-        );
-        const settled = String((data && data.host_name) || "");
-        rememberHostName(settled);
-        // 服务端会广播一次房间状态，这里顺手先把自己这份列表刷新，省掉一轮往返。
-        updateHostMembers(hostRoomState ? hostRoomState.members : [], settled);
-        showHostNameRow(false);
-        toast(settled ? `房主名已改为「${settled}」` : "已恢复显示「房主」", "success");
-    } catch (error) {
-        toast(error.message || "改房主名失败", "error");
-    } finally {
-        setButtonsBusy(button, false);
-    }
-}
-
 // -- playlist --------------------------------------------------------
 // Transcodes have no byte size, so they are described by length instead.
 function mediaMeta(media) {
@@ -666,14 +623,19 @@ function mediaMeta(media) {
 }
 
 function hostMediaLabel(media) {
-    if (!media) return "播放列表为空";
+    if (!media) return "";
     const meta = mediaMeta(media);
     return meta ? `${media.name} · ${meta}` : media.name;
 }
 
 function updateHostMediaLabel(media) {
     const label = $("host-media-name");
-    if (label) label.textContent = hostMediaLabel(media);
+    if (!label) return;
+    const text = hostMediaLabel(media);
+    label.textContent = text;
+    // Nothing playing means nothing to say; the playlist card already shows
+    // the room is empty.
+    label.classList.toggle("hidden", !text);
 }
 
 function setHostPlaylist(items) {
@@ -1633,9 +1595,8 @@ function startHost(session, file, room) {
     $("host-room-name").textContent = room && room.name ? room.name : session.name;
     updateHostMediaLabel(session.media);
     $("host-room-code").textContent = session.room_code;
-    $("host-position").textContent = "00:00";
-    $("host-rate").textContent = "1.00x";
-    $("host-buffered").textContent = "--";
+    $("host-progress-fill").style.width = "0%";
+    $("host-buffer-fill").style.width = "0%";
     hostRoomState = room || null;
     hostRoomStateTs = 0;
     updateHostMembers(room ? room.members : []);
@@ -1668,13 +1629,6 @@ function startHost(session, file, room) {
         },
         onLoaded: () => hideHostError(),
         onEnded: () => handleHostEnded(),
-        onMetrics: ({ buffered }) => {
-            $("host-buffered").textContent = fmtBytes(buffered);
-        },
-        onProgress: ({ position, absolute, rate }) => {
-            $("host-position").textContent = fmtTime(absolute === undefined ? position : absolute);
-            $("host-rate").textContent = `${Number(rate || 1).toFixed(2)}x`;
-        },
         onClosed: ({ fatal, code }) => {
             if (!fatal || code === 1000) return;
             toast("与服务器的连接已断开，请刷新页面后重新创建房间", "error");
@@ -1857,13 +1811,6 @@ function renderMemberPlaylist(roomState) {
     const items = roomState && Array.isArray(roomState.playlist) ? roomState.playlist : [];
     if (count) count.textContent = `${items.length} 项`;
     list.replaceChildren();
-    if (!items.length) {
-        const empty = document.createElement("li");
-        empty.className = "text-xs italic text-slate-600";
-        empty.textContent = "房主还未添加内容";
-        list.appendChild(empty);
-        return;
-    }
     items.forEach((item, index) => {
         const row = document.createElement("li");
         row.className =
@@ -2724,21 +2671,6 @@ function wire() {
             }
         });
     }
-    // The host's own row in the member list: one place to set what the members
-    // read above their own names.
-    $("btn-host-name")?.addEventListener("click", () => {
-        const row = $("host-name-row");
-        showHostNameRow(!row || row.classList.contains("hidden"));
-    });
-    $("btn-host-name-save")?.addEventListener("click", submitHostName);
-    $("host-name-input")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-            event.preventDefault();
-            submitHostName();
-        } else if (event.key === "Escape") {
-            showHostNameRow(false);
-        }
-    });
     $("btn-refresh-rooms").addEventListener("click", refreshRoomList);
     $("btn-sync-correct").addEventListener("click", correctMemberNow);
     $("btn-copy-health").addEventListener("click", copyMemberHealth);
@@ -2865,6 +2797,8 @@ function wire() {
         const video = $("member-video");
         const fill = $("member-progress-fill");
         const line = $("member-progress-line");
+        const buffer = $("member-progress-buffer");
+        const bufferLine = $("member-buffer-line");
         const bar = $("member-progress");
         const current = $("member-current");
         const duration = $("member-duration");
@@ -2885,6 +2819,13 @@ function wire() {
             const percent = total > 0 ? Math.min(100, Math.max(0, (position / total) * 100)) : 0;
             fill.style.width = `${percent.toFixed(2)}%`;
             line.style.width = `${percent.toFixed(2)}%`;
+            // 预读区：比已播区深一档的灰色，落在同一根进度条上。
+            const buffered =
+                controller && typeof controller.bufferedTime === "function" ? controller.bufferedTime() : 0;
+            const bufferedPercent =
+                total > 0 ? Math.min(100, Math.max(percent, (Math.max(position, buffered) / total) * 100)) : 0;
+            if (buffer) buffer.style.width = `${bufferedPercent.toFixed(2)}%`;
+            if (bufferLine) bufferLine.style.width = `${bufferedPercent.toFixed(2)}%`;
             bar.setAttribute("aria-valuenow", String(Math.round(percent)));
             current.textContent = fmtTime(position);
             duration.textContent = fmtTime(total);
@@ -2930,8 +2871,15 @@ function wire() {
             const { position, duration } = hostClock();
             seek.max = String(duration || 0);
             if (!scrubbing) seek.value = String(position || 0);
-            $("host-current").textContent = fmtTime(position || 0);
+            const shown = scrubbing ? Number(seek.value) || 0 : position || 0;
+            $("host-current").textContent = fmtTime(shown);
             $("host-duration").textContent = fmtTime(duration);
+            // 预读区画在已播区下面：一条进度条就能看出播到哪、缓冲到哪。
+            const host = state.host;
+            const buffered = host && typeof host.bufferedTime === "function" ? host.bufferedTime() : 0;
+            const percent = (value) => (duration > 0 ? Math.min(100, Math.max(0, (value / duration) * 100)) : 0);
+            $("host-progress-fill").style.width = `${percent(shown).toFixed(2)}%`;
+            $("host-buffer-fill").style.width = `${percent(Math.max(shown, buffered)).toFixed(2)}%`;
         };
 
         $("host-error-close")?.addEventListener("click", () => hideHostError());
@@ -3005,7 +2953,7 @@ function wire() {
         });
         seek.addEventListener("input", () => {
             scrubbing = true;
-            $("host-current").textContent = fmtTime(Number(seek.value) || 0);
+            syncTimeline();
         });
         seek.addEventListener("change", () => {
             const target = Number(seek.value) || 0;
@@ -3201,6 +3149,9 @@ async function init() {
     } catch {
         // ignore
     }
+    // The name last used when hosting, so a new room starts pre-filled.
+    const hostNameField = $("create-host-name");
+    if (hostNameField) hostNameField.value = storedHostName();
 
     const restored = await restoreFromUrl();
     if (restored) return;

@@ -357,6 +357,13 @@ export class MemberController {
         return this.timeOffset + clock;
     }
 
+    /** How far into the item this element has data, in item time. */
+    bufferedTime() {
+        const ranges = this.video.buffered;
+        if (!ranges || !ranges.length) return 0;
+        return this.timeOffset + (Number(ranges.end(ranges.length - 1)) || 0);
+    }
+
     switchMedia() {
         const video = this.video;
         if (!this.session.media_url) {
